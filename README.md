@@ -36,6 +36,18 @@ node node_modules/vite/bin/vite.js build --configLoader native
 
 ## Verification
 
+Quality gates define the bar and run in CI on every push:
+
+```bash
+npm run qa            # all gates, summaries and failures
+npm run qa:verbose    # every check with its measured value
+npm run qa:explore    # exploratory probes for problems gates don't cover
+```
+
+See [QA.md](QA.md) for what each gate protects and why it exists.
+
+Individual suites:
+
 ```bash
 npm run verify                        # typecheck + build + smoke + epub tests
 npm run typecheck                     # TypeScript only, no emit

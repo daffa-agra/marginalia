@@ -138,7 +138,8 @@ export function LibraryView({
         onChange={setShelfFilter}
         onAddShelf={(name) => {
           const shelf = store.addShelf(name);
-          notify(`Created the shelf “${shelf.name}”`);
+          if (shelf) notify(`Created the shelf “${shelf.name}”`);
+          return shelf !== null;
         }}
         onRenameShelf={(id, name) => store.renameShelf(id, name)}
         onDeleteShelf={(id) => {

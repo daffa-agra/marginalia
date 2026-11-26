@@ -9,6 +9,7 @@ import { DataModal } from './components/DataModal';
 import { UploadBookModal } from './components/UploadBookModal';
 import { BrandMark, Icon } from './components/icons';
 import { ToastRegion, useToasts } from './lib/toasts';
+import { listPendingDeletes, removePendingDelete } from './lib/pendingDeletes';
 import { cx } from './lib/utils';
 
 type View = 'library' | 'stats' | 'quotes';
@@ -57,6 +58,27 @@ export default function App() {
   useEffect(() => {
     document.title = openBookId ? 'Book — Marginalia' : TITLES[view];
   }, [view, openBookId]);
+
+  // A delete interrupted by a refresh must still be undoable. Anything whose
+  // window is still open gets its undo offered again on load.
+  useEffect(() => {
+    for (const pending of listPendingDeletes()) {
+      const remaining = Math.max(1000, pending.expiresAt - Date.now());
+      notify(`Deleted “${pending.book.title}”`, {
+        duration: remaining,
+        tone: 'danger',
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            removePendingDelete(pending.book.id);
+            store.restoreBook(pending.book, pending.quotes);
+          },
+        },
+      });
+    }
+    // Runs once, on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Global drag-and-drop: dropping a notes file anywhere opens the importer.
   useEffect(() => {

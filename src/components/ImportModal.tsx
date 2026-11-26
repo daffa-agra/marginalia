@@ -5,6 +5,7 @@ import { Modal } from './Modal';
 import { parseAnnotationFile } from '../lib/playbooks';
 import type { ParsedFile } from '../lib/playbooks';
 import { makeId } from '../lib/utils';
+import { colorForTitle } from '../lib/colors';
 import type { Book } from '../types';
 import { Icon } from './icons';
 
@@ -106,7 +107,7 @@ export function ImportModal({
           status: 'want-to-read',
           currentPage: 0,
           genres: [],
-          color: '#704f8f',
+          color: colorForTitle(target.bookTitle),
         });
         bookId = created.id;
       }

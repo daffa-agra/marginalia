@@ -134,24 +134,37 @@ export function useJournal() {
   /* ---------------- Shelves ---------------- */
 
   const addShelf = useCallback(
-    (name: string): Shelf => {
-      const shelf = makeShelf(name, data.shelves.length);
+    (name: string): Shelf | null => {
+      const trimmed = name.trim();
+      if (!trimmed) return null;
+      // Two shelves with the same name are indistinguishable in the bar, and
+      // "move to Reading" would be a coin flip. Reject rather than allow it.
+      if (data.shelves.some((s) => s.name.toLowerCase() === trimmed.toLowerCase())) return null;
+      const shelf = makeShelf(trimmed, data.shelves.length);
       mutate((d) => ({ ...d, shelves: [...d.shelves, shelf] }));
       return shelf;
     },
-    [data.shelves.length, mutate],
+    [data.shelves, mutate],
   );
 
   const renameShelf = useCallback(
-    (id: string, name: string) => {
+    (id: string, name: string): boolean => {
       const trimmed = name.trim();
-      if (!trimmed) return;
+      if (!trimmed) return false;
+      if (
+        data.shelves.some(
+          (s) => s.id !== id && s.name.toLowerCase() === trimmed.toLowerCase(),
+        )
+      ) {
+        return false;
+      }
       mutate((d) => ({
         ...d,
         shelves: d.shelves.map((s) => (s.id === id ? { ...s, name: trimmed } : s)),
       }));
+      return true;
     },
-    [mutate],
+    [data.shelves, mutate],
   );
 
   /**

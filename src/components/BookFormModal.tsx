@@ -8,17 +8,7 @@ import { Modal } from './Modal';
 import { InlineAlert } from './EmptyState';
 import { Icon } from './icons';
 import { parseNonNegativeInt, todayIso } from '../lib/utils';
-
-const COLOR_SWATCHES = [
-  { value: '#b4552d', name: 'Rust' },
-  { value: '#3f6f71', name: 'Teal' },
-  { value: '#5b6d8f', name: 'Slate' },
-  { value: '#8f5b6d', name: 'Mulberry' },
-  { value: '#6d7a5b', name: 'Moss' },
-  { value: '#a0703c', name: 'Ochre' },
-  { value: '#704f8f', name: 'Iris' },
-  { value: '#4f7a5c', name: 'Pine' },
-];
+import { SHELF_COLORS } from '../lib/colors';
 
 export interface BookFormValues {
   title: string;
@@ -50,7 +40,7 @@ export function emptyFormValues(): BookFormValues {
     startedAt: '',
     finishedAt: '',
     genres: '',
-    color: COLOR_SWATCHES[Math.floor(Math.random() * COLOR_SWATCHES.length)].value,
+    color: SHELF_COLORS[Math.floor(Math.random() * SHELF_COLORS.length)].value,
   };
 }
 
@@ -328,7 +318,7 @@ export function BookFormModal({
         <fieldset className="field swatch-field">
           <legend>Spine color</legend>
           <div className="swatch-row" role="radiogroup" aria-label="Spine color">
-            {COLOR_SWATCHES.map((c) => (
+            {SHELF_COLORS.map((c) => (
               <button
                 key={c.value}
                 type="button"

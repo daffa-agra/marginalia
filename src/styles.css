@@ -737,6 +737,13 @@ a {
   border-color: var(--ink-3);
 }
 
+.shelf-error {
+  margin: var(--s-2) 0 0;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  color: var(--danger);
+}
+
 .input-inline {
   width: 148px;
   min-height: 30px;

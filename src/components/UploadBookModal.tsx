@@ -9,6 +9,7 @@ import { looksLikeEpub } from '../lib/epub';
 import type { EpubMetadata } from '../lib/epub';
 import { extractEpubMetadata } from '../lib/epub';
 import { readEpubFile, saveBookBytes } from '../lib/bookFiles';
+import { DEFAULT_BOOK_COLOR } from '../lib/colors';
 
 /**
  * Add a book. Two paths that end in the same place:
@@ -58,6 +59,19 @@ export function UploadBookModal({
     try {
       const bytes = await readEpubFile(file);
       const metadata = await extractEpubMetadata(bytes);
+      const candidateTitle = (metadata.title ?? file.name.replace(/\.epub$/i, '')).trim();
+      // The same book uploaded twice creates two indistinguishable rows; it is
+      // almost always a double download rather than a second copy.
+      const existing = store.data.books.find(
+        (b) =>
+          b.title.trim().toLowerCase() === candidateTitle.toLowerCase() &&
+          (b.file?.fileName ?? '').toLowerCase() === file.name.toLowerCase(),
+      );
+      if (existing) {
+        setError(`“${candidateTitle}” is already in your library.`);
+        setBusy(false);
+        return;
+      }
       let coverUrl: string | undefined;
       if (metadata.cover) {
         const copy = new Uint8Array(metadata.cover.bytes);
@@ -65,7 +79,7 @@ export function UploadBookModal({
         coverUrl = URL.createObjectURL(blob);
       }
       setPending({ file, metadata, coverUrl });
-      setTitle(metadata.title ?? file.name.replace(/\.epub$/i, ''));
+      setTitle(candidateTitle);
       setAuthor(metadata.author ?? '');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not read that EPUB.');
@@ -88,7 +102,7 @@ export function UploadBookModal({
         currentPage: 0,
         totalPages: totalPages ? Number.parseInt(totalPages, 10) : undefined,
         genres: [],
-        color: '#3f6f71',
+        color: DEFAULT_BOOK_COLOR,
         shelfId,
         file: { kind: 'epub', fileName: pending.file.name, size, storage: 'local' },
       });
@@ -117,7 +131,7 @@ export function UploadBookModal({
       currentPage: 0,
       totalPages: totalPages ? Number.parseInt(totalPages, 10) : undefined,
       genres: [],
-      color: '#3f6f71',
+      color: DEFAULT_BOOK_COLOR,
       shelfId,
     });
     notify(`Added “${book.title}”`);

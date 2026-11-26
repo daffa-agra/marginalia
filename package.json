@@ -8,7 +8,10 @@
     "build": "tsc --noEmit && vite build --configLoader native",
     "preview": "vite preview --configLoader native",
     "typecheck": "tsc --noEmit",
-    "verify": "npm run typecheck && tsc -p tsconfig.smoke.json && npm run build && node smoke/smoke.cjs && node smoke/epub-tests.cjs"
+    "verify": "npm run typecheck && tsc -p tsconfig.smoke.json && npm run build && node smoke/smoke.cjs && node smoke/epub-tests.cjs",
+    "qa": "node smoke/qa-gates.cjs",
+    "qa:verbose": "node smoke/qa-gates.cjs --verbose",
+    "qa:explore": "node smoke/qa-exploratory.cjs"
   },
   "dependencies": {
     "react": "^19.1.0",

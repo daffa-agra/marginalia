@@ -13,6 +13,7 @@ import { Icon } from './icons';
 import { RatingStars, StatusMenu } from './StatusMenu';
 import { ShelfPicker } from './ShelfPicker';
 import { deleteBookBytes } from '../lib/bookFiles';
+import { addPendingDelete, removePendingDelete } from '../lib/pendingDeletes';
 
 /** How long a deleted book can be brought back, in ms. */
 const UNDO_WINDOW_MS = 10000;
@@ -245,8 +246,14 @@ export function BookDetailView({
                 // delete that already destroyed the EPUB would restore a book
                 // claiming a file it can never open.
                 let undone = false;
+                const expiresAt = Date.now() + UNDO_WINDOW_MS;
+                // Recorded in storage so a refresh during the window still
+                // offers the undo instead of silently finalising the delete.
+                addPendingDelete({ book: removed.book, quotes: removed.quotes, expiresAt });
                 const timer = window.setTimeout(() => {
-                  if (!undone) void deleteBookBytes(book.id).catch(() => undefined);
+                  if (undone) return;
+                  removePendingDelete(book.id);
+                  void deleteBookBytes(book.id).catch(() => undefined);
                 }, UNDO_WINDOW_MS);
                 notify(`Deleted “${removed.book.title}”`, {
                   duration: UNDO_WINDOW_MS,
@@ -256,6 +263,7 @@ export function BookDetailView({
                     onClick: () => {
                       undone = true;
                       window.clearTimeout(timer);
+                      removePendingDelete(book.id);
                       store.restoreBook(removed.book, removed.quotes);
                     },
                   },
