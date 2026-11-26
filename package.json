@@ -2,11 +2,13 @@
   "name": "marginalia",
   "private": true,
   "version": "0.1.0",
-  "description": "A personal book journal: library, reviews, quotes, and reading stats.",
+  "description": "A personal book journal and EPUB reader: shelves, notes in the margins, and reading life.",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "dev": "vite --configLoader native",
+    "build": "tsc --noEmit && vite build --configLoader native",
+    "preview": "vite preview --configLoader native",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run typecheck && tsc -p tsconfig.smoke.json && npm run build && node smoke/smoke.cjs && node smoke/epub-tests.cjs"
   },
   "dependencies": {
     "react": "^19.1.0",

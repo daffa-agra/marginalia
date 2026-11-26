@@ -37,15 +37,30 @@ node node_modules/vite/bin/vite.js build --configLoader native
 ## Verification
 
 ```bash
-npx tsc --noEmit -p tsconfig.json     # type check
-npx tsc -p tsconfig.smoke.json        # compile the test build
-node smoke/smoke.cjs                  # render, parser, storage, exporters
-node smoke/epub-tests.cjs             # ZIP reader, EPUB metadata, shelves
-node smoke/verify-trust.cjs           # delete/undo, focus, durability (needs the app served)
-node smoke/shelf-upload-tests.cjs     # shelves and upload in a real browser
+npm run verify                        # typecheck + build + smoke + epub tests
+npm run typecheck                     # TypeScript only, no emit
+npm run build                         # production build
 ```
 
-The browser suites expect the built app on `http://127.0.0.1:4173` (`node smoke/serve-dist.cjs`).
+The EPUB fixtures are generated rather than committed; `epub-tests.cjs` builds
+them on demand, and `node smoke/make-epub-fixture.cjs` does it explicitly.
+The smoke build must be compiled first:
+
+```bash
+npx tsc -p tsconfig.smoke.json
+node smoke/smoke.cjs                  # render, parser, storage, exporters
+node smoke/epub-tests.cjs             # ZIP reader, EPUB metadata, shelves
+```
+
+The browser suites need the built app served on `http://127.0.0.1:4173`:
+
+```bash
+node smoke/serve-dist.cjs             # serves dist/
+node smoke/verify-trust.cjs           # delete/undo, focus, durability
+node smoke/shelf-upload-tests.cjs     # shelves and upload in a real browser
+node smoke/byte-lifecycle.cjs         # book bytes survive undo, clear on expiry
+node smoke/dev-server-check.cjs       # the dev server serves the app
+```
 
 ## Roadmap
 

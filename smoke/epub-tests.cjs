@@ -12,6 +12,18 @@ const { listEntries, readTextEntry } = require(path.join(dist, 'lib', 'zip.js'))
 const fixture = path.join(__dirname, '..', '.review', 'fixtures', 'lighthouse.epub');
 const broken = path.join(__dirname, '..', '.review', 'fixtures', 'lighthouse-broken.epub');
 
+// The fixtures are generated, not committed, so a fresh checkout has none.
+// Build them on demand rather than failing with a confusing ENOENT.
+if (!fs.existsSync(fixture) || !fs.existsSync(broken)) {
+  const { execFileSync } = require('child_process');
+  execFileSync(process.execPath, [path.join(__dirname, 'make-epub-fixture.cjs')], { stdio: 'ignore' });
+}
+
+if (!fs.existsSync(fixture)) {
+  console.error('Could not generate the EPUB fixtures. Run node smoke/make-epub-fixture.cjs first.');
+  process.exit(1);
+}
+
 async function toArrayBuffer(file) {
   const buf = fs.readFileSync(file);
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
