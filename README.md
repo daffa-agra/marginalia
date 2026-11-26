@@ -4,6 +4,7 @@ A personal book journal and EPUB reader — your shelves, notes in the margins, 
 
 ## What it does today
 
+- **Reading plan** — queue the books you mean to read next, in order. Undated by design: it says which book is next, not when to read it. The page reports your measured pace and when the queue would empty at that pace.
 - **Shelves** — group books the way you think of them (*Bedside*, *Research*, *Re-read someday*). **One book, one shelf**, like folders: shelf counts always add up to your library. Unshelved is always there, and deleting a shelf moves its books rather than deleting them.
 - **EPUB upload** — drop a DRM-free EPUB and the title, author, language, publisher, cover and chapter count are read from the book itself. Or add a book by hand as metadata only.
 - **Library** — track every book through *Want to read → Reading → Finished* (or *Abandoned*), with progress, ratings, reviews, genres, series and dates.
@@ -62,6 +63,7 @@ The smoke build must be compiled first:
 npx tsc -p tsconfig.smoke.json
 node smoke/smoke.cjs                  # render, parser, storage, exporters
 node smoke/epub-tests.cjs             # ZIP reader, EPUB metadata, shelves
+node smoke/plan-tests.cjs             # reading plan queue, pace, forecast
 ```
 
 The browser suites need the built app served on `http://127.0.0.1:4173`:
@@ -70,6 +72,7 @@ The browser suites need the built app served on `http://127.0.0.1:4173`:
 node smoke/serve-dist.cjs             # serves dist/
 node smoke/verify-trust.cjs           # delete/undo, focus, durability
 node smoke/shelf-upload-tests.cjs     # shelves and upload in a real browser
+node smoke/plan-ui-tests.cjs          # the reading plan in a real browser
 node smoke/byte-lifecycle.cjs         # book bytes survive undo, clear on expiry
 node smoke/dev-server-check.cjs       # the dev server serves the app
 ```
@@ -103,13 +106,16 @@ src/
     epub.ts             EPUB metadata extraction (container → OPF → cover)
     zip.ts              Minimal ZIP reader (stored + deflate)
     bookFiles.ts        EPUB bytes in IndexedDB, quota and persistence
+    plan.ts             Reading plan queue, measured pace, forecast
+    pendingDeletes.ts   Undo that survives a refresh
+    colors.ts           Spine colours, shared by every add-book path
     status.ts           The single status model
     toasts.tsx          Transient feedback and undo
     playbooks.ts        Play Books export parser
     exporters.ts        JSON / CSV / Markdown export
   components/           Book cards, modals, shelves, authored icon set
-  views/                Library, Quotes, Stats
-smoke/                  Test suites and fixtures
+  views/                Library, Reading plan, Quotes, Reading life
+smoke/                  Test suites, QA gates, fixtures
 ```
 
 ## Notes

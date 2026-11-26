@@ -110,6 +110,23 @@ export function BookDetailView({
               }}
               label={`Shelf for ${book.title}`}
             />
+            <button
+              type="button"
+              className={book.queuePosition !== undefined ? 'btn btn-small queued' : 'btn btn-small'}
+              aria-pressed={book.queuePosition !== undefined}
+              onClick={() => {
+                if (book.queuePosition !== undefined) {
+                  store.unqueueBook(book.id);
+                  notify('Removed from the reading plan');
+                } else {
+                  store.queueBook(book.id);
+                  notify('Added to the reading plan');
+                }
+              }}
+            >
+              <Icon name="bookmark" size={13} />
+              {book.queuePosition !== undefined ? 'In the plan' : 'Add to plan'}
+            </button>
             {book.file ? (
               <span className="file-badge">
                 <Icon name="shelf" size={12} /> EPUB attached

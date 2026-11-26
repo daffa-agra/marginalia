@@ -201,6 +201,7 @@ function pickBook(b: unknown): Book | null {
     genres,
     color: str(raw.color) ?? '#b4552d',
     shelfId: str(raw.shelfId),
+    queuePosition: num(raw.queuePosition) != null ? Math.max(0, num(raw.queuePosition)!) : undefined,
     file: pickEpubFile(raw.file),
     createdAt: num(raw.createdAt) ?? Date.now(),
   };

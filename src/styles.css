@@ -955,6 +955,192 @@ a {
   overflow-wrap: anywhere;
 }
 
+/* ---------- Reading plan ---------- */
+
+.plan-next {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-l);
+  padding: var(--s-5) var(--s-6);
+  margin-bottom: var(--s-4);
+}
+
+.plan-next-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  color: var(--accent-strong);
+  margin-bottom: var(--s-2);
+}
+
+.plan-next-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+}
+
+.plan-next-title {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-body);
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.25;
+}
+
+.plan-next-title:hover {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.plan-next-author {
+  margin: 2px 0 0;
+}
+
+.plan-forecast-line {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.plan-queue {
+  list-style: none;
+  margin: 0 0 var(--s-4);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.plan-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.plan-row:last-child {
+  border-bottom: 0;
+}
+
+.plan-index {
+  font-family: var(--font-ui);
+  font-size: 0.8rem;
+  color: var(--ink-3);
+  min-width: 1.5ch;
+  text-align: right;
+}
+
+.plan-row .spine {
+  width: 3px;
+  height: 34px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.plan-row-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.plan-row-title {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-body);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.plan-row-title:hover {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.plan-row-meta {
+  margin: 1px 0 0;
+  font-size: 0.82rem;
+}
+
+.plan-row-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.plan-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.plan-row-actions .icon-btn {
+  width: 28px;
+  min-height: 28px;
+}
+
+.flip-up {
+  transform: rotate(180deg);
+}
+
+.plan-candidates {
+  margin-top: var(--s-4);
+}
+
+.plan-candidate-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.plan-candidate-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--s-2);
+}
+
+.plan-candidate-list li:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.plan-candidate-title {
+  font-weight: 600;
+}
+
+.plan-candidate-list .btn {
+  margin-left: auto;
+}
+
+.queue-btn.queued,
+.btn.queued {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
 /* ---------- Library ---------- */
 
 .view-head {
@@ -2408,6 +2594,22 @@ a {
 }
 
 /* ---------- Responsive ---------- */
+
+@media (max-width: 1100px) {
+  /* Four nav items plus three header actions is more than fits mid-width.
+     Shed the secondary label before anything has to wrap or overflow. */
+  .app-header {
+    gap: var(--s-4);
+  }
+
+  .header-action-label {
+    display: none;
+  }
+
+  .import-trigger {
+    padding: 0 var(--s-3);
+  }
+}
 
 @media (max-width: 900px) {
   .app-header {

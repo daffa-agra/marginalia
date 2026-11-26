@@ -45,6 +45,11 @@ export interface Book {
   color: string;
   /** At most one shelf. Absent means Unshelved. */
   shelfId?: string;
+  /**
+   * Position in the reading plan queue, 0-based. Absent means the book is not
+   * queued. A queue book is one you intend to read next, in this order.
+   */
+  queuePosition?: number;
   /** Present once an EPUB has been attached to this book. */
   file?: EpubFile;
   /** Unix ms when the book was added to the journal. */

@@ -12,6 +12,7 @@ import {
 } from './storage';
 import { sampleData } from './sampleData';
 import { makeId } from './lib/utils';
+import { reindexAfterRemoval } from './lib/plan';
 
 const SAMPLE_PREFIX = 'demo-';
 
@@ -106,11 +107,24 @@ export function useJournal() {
       const book = data.books.find((b) => b.id === id);
       if (!book) return undefined;
       const quotes = data.quotes.filter((q) => q.bookId === id);
-      mutate((d) => ({
-        ...d,
-        books: d.books.filter((b) => b.id !== id),
-        quotes: d.quotes.filter((q) => q.bookId !== id),
-      }));
+      mutate((d) => {
+        // Deleting a queued book must not leave a hole in the plan, or every
+        // book behind it keeps a stale position number.
+        const remainingQueue = d.books
+          .filter((b) => typeof b.queuePosition === 'number' && b.id !== id)
+          .sort((a, b) => (a.queuePosition ?? 0) - (b.queuePosition ?? 0));
+        const positions = new Map(remainingQueue.map((b, index) => [b.id, index]));
+        return {
+          ...d,
+          books: d.books
+            .filter((b) => b.id !== id)
+            .map((b) => {
+              const pos = positions.get(b.id);
+              return pos === undefined ? b : { ...b, queuePosition: pos };
+            }),
+          quotes: d.quotes.filter((q) => q.bookId !== id),
+        };
+      });
       return { book, quotes };
     },
     [data.books, data.quotes, mutate],
@@ -297,6 +311,95 @@ export function useJournal() {
     setData({ version: 1, books: sample.books, quotes: sample.quotes, shelves: [] });
   }, []);
 
+  /* ---------------- Reading plan queue ---------------- */
+
+  /** Adds a book to the end of the reading plan. */
+  const queueBook = useCallback(
+    (bookId: string) => {
+      mutate((d) => {
+        const queue = d.books
+          .filter((b) => typeof b.queuePosition === 'number' && b.id !== bookId)
+          .sort((a, b) => (a.queuePosition ?? 0) - (b.queuePosition ?? 0));
+        const position = queue.length;
+        return {
+          ...d,
+          books: d.books.map((b) => (b.id === bookId ? { ...b, queuePosition: position } : b)),
+        };
+      });
+    },
+    [mutate],
+  );
+
+  /** Removes a book from the plan and closes the gap it leaves. */
+  const unqueueBook = useCallback(
+    (bookId: string) => {
+      mutate((d) => {
+        const queue = d.books
+          .filter((b) => typeof b.queuePosition === 'number')
+          .sort((a, b) => (a.queuePosition ?? 0) - (b.queuePosition ?? 0));
+        const index = queue.findIndex((b) => b.id === bookId);
+        const reindexed = new Map(
+          reindexAfterRemoval(queue, index).map(({ id, queuePosition }) => [id, queuePosition]),
+        );
+        return {
+          ...d,
+          books: d.books.map((b) => {
+            if (b.id === bookId) {
+              const { queuePosition: _removed, ...rest } = b;
+              return rest;
+            }
+            const nextPos = reindexed.get(b.id);
+            return nextPos === undefined ? b : { ...b, queuePosition: nextPos };
+          }),
+        };
+      });
+    },
+    [mutate],
+  );
+
+  /** Moves a queued book one step up or down, swapping with its neighbour. */
+  const moveQueueItem = useCallback(
+    (bookId: string, direction: 'up' | 'down') => {
+      mutate((d) => {
+        const queue = d.books
+          .filter((b) => typeof b.queuePosition === 'number')
+          .sort((a, b) => (a.queuePosition ?? 0) - (b.queuePosition ?? 0));
+        const index = queue.findIndex((b) => b.id === bookId);
+        const swapWith = direction === 'up' ? index - 1 : index + 1;
+        if (index < 0 || swapWith < 0 || swapWith >= queue.length) return d;
+
+        const order = queue.map((b) => b.id);
+        [order[index], order[swapWith]] = [order[swapWith], order[index]];
+        const positions = new Map(order.map((id, i) => [id, i]));
+        return {
+          ...d,
+          books: d.books.map((b) => {
+            const pos = positions.get(b.id);
+            return pos === undefined ? b : { ...b, queuePosition: pos };
+          }),
+        };
+      });
+    },
+    [mutate],
+  );
+
+  /** Replaces the whole order, for drag-and-drop. */
+  const reorderQueue = useCallback(
+    (orderedIds: string[]) => {
+      mutate((d) => {
+        const positions = new Map(orderedIds.map((id, index) => [id, index]));
+        return {
+          ...d,
+          books: d.books.map((b) => {
+            const pos = positions.get(b.id);
+            return pos === undefined ? b : { ...b, queuePosition: pos };
+          }),
+        };
+      });
+    },
+    [mutate],
+  );
+
   const quotesByBook = useMemo(() => {
     const map = new Map<string, Quote[]>();
     for (const q of data.quotes) {
@@ -323,6 +426,10 @@ export function useJournal() {
     reorderShelves,
     attachBookFile,
     removeBookFile,
+    queueBook,
+    unqueueBook,
+    moveQueueItem,
+    reorderQueue,
     addQuotes,
     updateQuote,
     deleteQuote,

@@ -137,6 +137,7 @@ gate('G3', 'Test suites', 'Every node-level suite passes.');
 for (const [name, file] of [
   ['render, parser, storage, exporters', 'smoke/smoke.cjs'],
   ['ZIP, EPUB metadata, shelves', 'smoke/epub-tests.cjs'],
+  ['reading plan queue, pace, forecast', 'smoke/plan-tests.cjs'],
 ]) {
   check(name, () => {
     const out = run('node', [file]);
@@ -200,6 +201,31 @@ check('export round-trips through sanitize unchanged', () => {
   `;
   runScript(script);
   return 'stable';
+});
+check('reading plan positions stay contiguous', () => {
+  const script = `
+    const { queueOf, reindexAfterRemoval } = require('./dist-smoke/lib/plan.js');
+    const mk = (id, pos) => ({ id, title: id, author: 'A', status: 'want-to-read', currentPage: 0, genres: [], color: '#000000', createdAt: 1, queuePosition: pos });
+    const books = [mk('a', 0), mk('b', 1), mk('c', 2)];
+    const after = reindexAfterRemoval(queueOf(books), 1);
+    const positions = after.map((x) => x.queuePosition);
+    if (JSON.stringify(positions) !== JSON.stringify([0, 1])) throw new Error('gap left: ' + positions);
+    console.log('ok');
+  `;
+  runScript(script);
+  return 'no gaps after removal';
+});
+check('the forecast refuses to guess without history', () => {
+  const script = `
+    const { measurePace, forecastQueue } = require('./dist-smoke/lib/plan.js');
+    const pace = measurePace([{ id: 'a', status: 'finished', finishedAt: new Date().toISOString().slice(0, 10) }]);
+    if (pace.confident) throw new Error('called one book a pace');
+    const f = forecastQueue([{ id: 'q', queuePosition: 0 }], pace);
+    if (f.weeksToClear !== null) throw new Error('forecasted from no history');
+    console.log('ok');
+  `;
+  runScript(script);
+  return 'declines to guess';
 });
 
 /* ────────────────────────────────────────────────────────────────────
@@ -368,9 +394,11 @@ check('no secrets or private identifiers tracked', () => {
   const offenders = [];
   for (const file of tracked) {
     if (!/\.(ts|tsx|js|cjs|md|json|html|css|yml|yaml)$/.test(file)) continue;
+    // The gate's own detector patterns would match themselves.
+    if (file.replace(/\\/g, '/') === 'smoke/qa-gates.cjs') continue;
     const text = fs.readFileSync(path.join(ROOT, file), 'utf8');
     if (/eyJ[A-Za-z0-9_-]{10,}/.test(text)) offenders.push(`${file}: JWT`);
-    if (/ghp_[A-Za-z0-9]{20,}|github_pat_/.test(text)) offenders.push(`${file}: GitHub token`);
+    if (/g[h]p_[A-Za-z0-9]{20,}|github_p[a]t_/.test(text)) offenders.push(`${file}: GitHub token`);
     if (/[0-9a-f]{32}/.test(text) && /account/i.test(text)) offenders.push(`${file}: possible account id`);
     if (/[\w.+-]+@(gmail|outlook|yahoo)\.com/.test(text)) offenders.push(`${file}: personal email`);
   }

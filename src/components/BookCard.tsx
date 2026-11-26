@@ -9,11 +9,16 @@ export function BookCard({
   quoteCount,
   onOpen,
   onStatusChange,
+  onQueueToggle,
+  queuePosition,
 }: {
   book: Book;
   quoteCount: number;
   onOpen: () => void;
   onStatusChange: (next: ReadStatus) => void;
+  onQueueToggle: () => void;
+  /** 1-based position when queued, undefined otherwise. */
+  queuePosition?: number;
 }) {
   const pct = progressPercent(book);
   const showProgress = book.status === 'reading' && book.totalPages;
@@ -73,6 +78,20 @@ export function BookCard({
       <div className="book-card-foot">
         <button type="button" className="btn btn-ghost btn-small" onClick={onOpen}>
           Open
+        </button>
+        <button
+          type="button"
+          className={queuePosition ? 'btn btn-ghost btn-small queue-btn queued' : 'btn btn-ghost btn-small queue-btn'}
+          aria-label={
+            queuePosition
+              ? `Remove ${book.title} from the reading plan`
+              : `Add ${book.title} to the reading plan`
+          }
+          aria-pressed={Boolean(queuePosition)}
+          onClick={onQueueToggle}
+        >
+          <Icon name="bookmark" size={12} />
+          {queuePosition ? `#${queuePosition}` : null}
         </button>
         {quoteCount > 0 && (
           <span className="quote-count" title={`${quoteCount} quotes`}>

@@ -318,6 +318,132 @@ async function seed(page, data) {
     await ctx.close();
   }
 
+  /* ── 14. Reading plan: orphaned positions after a book is deleted ── */
+  {
+    const { ctx, page } = await fresh(browser);
+    await seed(page, {
+      version: 1,
+      books: [
+        { id: 'a', title: 'Alpha', author: 'A', status: 'want-to-read', currentPage: 0, queuePosition: 0, genres: [], color: '#3f6f71', createdAt: 1 },
+        { id: 'b', title: 'Beta', author: 'A', status: 'want-to-read', currentPage: 0, queuePosition: 1, genres: [], color: '#3f6f71', createdAt: 2 },
+        { id: 'c', title: 'Gamma', author: 'A', status: 'want-to-read', currentPage: 0, queuePosition: 2, genres: [], color: '#3f6f71', createdAt: 3 },
+      ],
+      quotes: [],
+      shelves: [],
+    });
+    // Delete the middle book from its detail page.
+    await page.locator('.book-card', { hasText: 'Beta' }).locator('.book-link').click();
+    await page.waitForTimeout(300);
+    await page.getByRole('button', { name: /Delete book/ }).click();
+    await page.waitForTimeout(200);
+    await page.getByRole('button', { name: /Delete book and quotes/ }).click();
+    await page.waitForTimeout(600);
+    const positions = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('marginalia.journal.v1')).books
+        .filter((b) => typeof b.queuePosition === 'number')
+        .map((b) => b.queuePosition)
+        .sort((x, y) => x - y),
+    );
+    const contiguous = positions.every((p, i) => p === i);
+    if (!contiguous) {
+      finding('P2', 'Plan', 'Deleting a queued book leaves a gap in queue positions', JSON.stringify(positions));
+    }
+    await ctx.close();
+  }
+
+  /* ── 15. Reading plan: duplication under repeated queue toggles ── */
+  {
+    const { ctx, page } = await fresh(browser);
+    await seed(page, {
+      version: 1,
+      books: [{ id: 'a', title: 'Toggle', author: 'A', status: 'want-to-read', currentPage: 0, genres: [], color: '#3f6f71', createdAt: 1 }],
+      quotes: [],
+      shelves: [],
+    });
+    const btn = page.locator('.book-card .queue-btn');
+    for (let i = 0; i < 4; i++) {
+      await btn.click();
+      await page.waitForTimeout(150);
+    }
+    const state = await page.evaluate(() => {
+      const b = JSON.parse(localStorage.getItem('marginalia.journal.v1')).books[0];
+      return { queuePosition: b.queuePosition ?? null };
+    });
+    if (state.queuePosition !== null) {
+      finding('P3', 'Plan', 'Even number of queue toggles should leave the book unqueued', JSON.stringify(state));
+    }
+    await ctx.close();
+  }
+
+  /* ── 16. Reading plan on mobile ── */
+  {
+    const { ctx, page } = await fresh(browser, { viewport: { width: 390, height: 844 } });
+    await seed(page, {
+      version: 1,
+      books: [
+        { id: 'a', title: 'A Very Long Book Title That Keeps Going And Going For Quite A While', author: 'Someone With A Long Name', status: 'want-to-read', currentPage: 0, queuePosition: 0, genres: [], color: '#3f6f71', createdAt: 1 },
+        { id: 'b', title: 'Second', author: 'A', status: 'want-to-read', currentPage: 0, queuePosition: 1, genres: [], color: '#3f6f71', createdAt: 2 },
+      ],
+      quotes: [],
+      shelves: [],
+    });
+    await page.getByRole('button', { name: /^Plan$/ }).click();
+    await page.waitForTimeout(500);
+    const m = await page.evaluate(() => ({
+      doc: document.documentElement.scrollWidth,
+      vw: window.innerWidth,
+    }));
+    if (m.doc > m.vw + 1) finding('P2', 'Plan', 'Plan view overflows horizontally on mobile', JSON.stringify(m));
+    await ctx.close();
+  }
+
+  /* ── 17. Reading plan: settings survive reload after reorder ── */
+  {
+    const { ctx, page } = await fresh(browser);
+    await seed(page, {
+      version: 1,
+      books: [
+        { id: 'a', title: 'One', author: 'A', status: 'want-to-read', currentPage: 0, queuePosition: 0, genres: [], color: '#3f6f71', createdAt: 1 },
+        { id: 'b', title: 'Two', author: 'A', status: 'want-to-read', currentPage: 0, queuePosition: 1, genres: [], color: '#3f6f71', createdAt: 2 },
+      ],
+      quotes: [],
+      shelves: [],
+    });
+    await page.getByRole('button', { name: /^Plan$/ }).click();
+    await page.waitForTimeout(400);
+    await page.locator('.plan-row', { hasText: 'Two' }).getByRole('button', { name: /Move Two up/ }).click();
+    await page.waitForTimeout(400);
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: /^Plan$/ }).click();
+    await page.waitForTimeout(400);
+    const order = await page.evaluate(() =>
+      [...document.querySelectorAll('.plan-row-title')].map((b) => b.textContent.trim()),
+    );
+    if (JSON.stringify(order) !== JSON.stringify(['Two', 'One'])) {
+      finding('P2', 'Plan', 'Queue order is lost across a reload after reordering', JSON.stringify(order));
+    }
+    await ctx.close();
+  }
+
+  /* ── 18. Header fits at every width ── */
+  {
+    const widths = [1280, 1100, 1024, 900, 768, 640, 390];
+    const bad = [];
+    for (const width of widths) {
+      const { ctx, page } = await fresh(browser, { viewport: { width, height: 900 } });
+      const r = await page.evaluate(() => ({
+        doc: document.documentElement.scrollWidth,
+        vw: window.innerWidth,
+        headerH: Math.round(document.querySelector('.app-header').getBoundingClientRect().height),
+      }));
+      if (r.doc > r.vw + 1) bad.push({ width, doc: r.doc, vw: r.vw });
+      await ctx.close();
+    }
+    if (bad.length) {
+      finding('P1', 'Responsive', 'Page overflows horizontally at some widths', JSON.stringify(bad));
+    }
+  }
+
   await browser.close();
 
   console.log('');

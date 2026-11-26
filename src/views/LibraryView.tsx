@@ -95,6 +95,15 @@ export function LibraryView({
     return list;
   }, [data.books, query, statusFilter, genreFilter, sort, shelfFilter]);
 
+  const queuePositions = useMemo(() => {
+    const map = new Map<string, number>();
+    const queued = data.books
+      .filter((b) => typeof b.queuePosition === 'number')
+      .sort((a, b) => (a.queuePosition ?? 0) - (b.queuePosition ?? 0));
+    queued.forEach((b, index) => map.set(b.id, index + 1));
+    return map;
+  }, [data.books]);
+
   const setStatus = (book: Book, next: ReadStatus) => {
     store.updateBook(book.id, statusPatch(book, next, todayIso()));
   };
@@ -221,6 +230,16 @@ export function LibraryView({
                 quoteCount={store.quotesByBook.get(book.id)?.length ?? 0}
                 onOpen={() => onOpenBook(book.id)}
                 onStatusChange={(next) => setStatus(book, next)}
+                queuePosition={queuePositions.get(book.id)}
+                onQueueToggle={() => {
+                  if (queuePositions.has(book.id)) {
+                    store.unqueueBook(book.id);
+                    notify(`Removed “${book.title}” from the plan`);
+                  } else {
+                    store.queueBook(book.id);
+                    notify(`Queued “${book.title}”`);
+                  }
+                }}
               />
             </li>
           ))}

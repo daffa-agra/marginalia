@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useJournal } from './useJournal';
 import { LibraryView } from './views/LibraryView';
 import { StatsView } from './views/StatsView';
+import { PlanView } from './views/PlanView';
 import { QuotesView } from './views/QuotesView';
 import { BookDetailView } from './components/BookDetail';
 import { ImportModal } from './components/ImportModal';
@@ -12,16 +13,18 @@ import { ToastRegion, useToasts } from './lib/toasts';
 import { listPendingDeletes, removePendingDelete } from './lib/pendingDeletes';
 import { cx } from './lib/utils';
 
-type View = 'library' | 'stats' | 'quotes';
+type View = 'library' | 'plan' | 'quotes' | 'stats';
 
-const NAV: Array<{ id: View; label: string; icon: 'shelf' | 'quote' | 'chart' }> = [
+const NAV: Array<{ id: View; label: string; icon: 'shelf' | 'quote' | 'chart' | 'bookmark' }> = [
   { id: 'library', label: 'Library', icon: 'shelf' },
+  { id: 'plan', label: 'Plan', icon: 'bookmark' },
   { id: 'quotes', label: 'Quotes', icon: 'quote' },
   { id: 'stats', label: 'Reading life', icon: 'chart' },
 ];
 
 const TITLES: Record<View, string> = {
   library: 'Marginalia — Book journal',
+  plan: 'Reading plan — Marginalia',
   quotes: 'Quotes — Marginalia',
   stats: 'Reading life — Marginalia',
 };
@@ -232,6 +235,13 @@ export default function App() {
           <LibraryView store={store} onOpenBook={openBook} notify={notify} />
         ) : view === 'stats' ? (
           <StatsView data={store.data} />
+        ) : view === 'plan' ? (
+          <PlanView
+            store={store}
+            onOpenBook={openBook}
+            notify={notify}
+            onBrowseLibrary={goLibrary}
+          />
         ) : (
           <QuotesView store={store} notify={notify} />
         )}
