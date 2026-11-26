@@ -310,6 +310,37 @@ check('reading position is chapter plus fraction, not a page number', () => {
   }
   return 'survives reflow by design';
 });
+check('page geometry cannot drift: the stride is the page, not a measured guess', () => {
+  const css = read('src/lib/readerCss.ts');
+  const pag = read('src/lib/pagination.ts');
+  // The column container must not carry padding. Padding shrinks the content
+  // box the columns are laid into while the translate stride stays the page
+  // width; the two then disagree by a fraction of a pixel per page, which
+  // compounds until the text has slid out of the frame.
+  if (/body\s*\{[^}]*padding:\s*[^0]/.test(css)) {
+    throw new Error('the column container must not have padding');
+  }
+  // Columns must be contiguous, so column n starts at exactly n × column width.
+  if (!/setProperty\(\s*'column-gap'\s*,\s*'0px'/.test(pag)) {
+    throw new Error('columns are not contiguous');
+  }
+  // The stride has to come from the page box, and the column count has to be
+  // derived from the same number.
+  if (!/columnWidth\s*=\s*pageWidth\s*\/\s*columns/.test(pag)) {
+    throw new Error('the column width is not derived from the page width');
+  }
+  return 'stride = page width, columns contiguous and divisible';
+});
+check('a reflow re-anchors to the text, not to the page index', () => {
+  const reader = read('src/views/ReaderView.tsx');
+  // A page index is meaningless after a reflow; the stored fraction must be
+  // re-resolved through the text before the new document replaces the old.
+  if (!/textFractionAtPage/.test(reader)) throw new Error('no text anchor taken before reflow');
+  if (!/pageForTextFraction|pageForElement/.test(reader)) {
+    throw new Error('the anchor is never resolved back to a page');
+  }
+  return 'fraction → text anchor → page';
+});
 
 /* ────────────────────────────────────────────────────────────────────
    G6 · Durability and safety

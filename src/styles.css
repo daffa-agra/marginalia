@@ -957,23 +957,88 @@ a {
 
 /* ---------- Reader ---------- */
 
+/*
+ * The reader is chrome over a page, not a page inside chrome. The header and
+ * footer are absolutely positioned overlays, so hiding them never reflows the
+ * book: the text keeps the full window and the page count never changes just
+ * because the controls appeared.
+ */
 .reader {
   position: fixed;
   inset: 0;
-  display: flex;
-  flex-direction: column;
+  display: block;
   background: var(--bg);
   z-index: 45;
 }
 
+.reader-stage {
+  position: absolute;
+  inset: 0;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.reader-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: transparent;
+}
+
 .reader-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 6;
   display: flex;
   align-items: center;
   gap: var(--s-3);
   padding: var(--s-2) var(--s-4);
-  background: var(--surface);
+  min-height: 48px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
+  transition: opacity var(--t-mid) var(--ease), transform var(--t-mid) var(--ease);
+}
+
+.reader-foot {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-4);
+  min-height: 44px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-top: 1px solid var(--border);
+  transition: opacity var(--t-mid) var(--ease), transform var(--t-mid) var(--ease);
+}
+
+/* Hidden chrome is gone, not merely invisible: it must not catch pointer events
+   or be reachable by keyboard while the reader is reading. */
+.reader:not(.chrome-visible) .reader-bar {
+  opacity: 0;
+  transform: translateY(-100%);
+  pointer-events: none;
+}
+
+.reader:not(.chrome-visible) .reader-foot {
+  opacity: 0;
+  transform: translateY(100%);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-bar,
+  .reader-foot {
+    transition: none;
+  }
 }
 
 .reader-icon-btn {
@@ -1026,22 +1091,6 @@ a {
   gap: 2px;
 }
 
-.reader-stage {
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  background: var(--surface);
-  overflow: hidden;
-}
-
-.reader-frame {
-  width: 100%;
-  height: 100%;
-  border: 0;
-  display: block;
-  background: transparent;
-}
-
 /* Reading settings sheet */
 
 .reader-settings {
@@ -1053,7 +1102,7 @@ a {
   background: var(--surface);
   border-left: 1px solid var(--border-strong);
   box-shadow: var(--shadow-pop);
-  z-index: 3;
+  z-index: 8;
   overflow-y: auto;
   padding: var(--s-4);
   display: flex;
@@ -1177,20 +1226,13 @@ a {
 }
 
 .reader-loading {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 100%;
-}
-
-.reader-foot {
-  display: flex;
-  align-items: center;
-  gap: var(--s-3);
-  padding: var(--s-2) var(--s-4);
   background: var(--surface);
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
+  z-index: 2;
 }
 
 .reader-nav-btn {
@@ -1236,16 +1278,15 @@ a {
   text-align: right;
 }
 
-.reader-chrome-toggle {
-  display: none;
-}
-
-/* Table of contents drawer */
+/*
+ * The chrome floats over the page at z-index 6; the drawers and their scrim
+ * sit above it, because a modal surface must cover the controls that opened it.
+ */
 .reader-scrim {
   position: absolute;
   inset: 0;
   background: rgb(20 16 11 / 0.35);
-  z-index: 1;
+  z-index: 7;
 }
 
 .reader-toc {
@@ -1257,7 +1298,7 @@ a {
   background: var(--surface);
   border-right: 1px solid var(--border-strong);
   box-shadow: var(--shadow-pop);
-  z-index: 2;
+  z-index: 8;
   overflow-y: auto;
   padding: var(--s-4);
   animation: rise-in var(--t-mid) var(--ease);
@@ -1314,6 +1355,38 @@ a {
   margin: var(--s-4);
 }
 
+/*
+ * Mouse users get the Readest "edge lid": a thin strip at the top and bottom of
+ * the page reveals the chrome, so a reader who never clicks the middle is not
+ * stranded without controls. It stays clear of the first and last line of text.
+ */
+.reader-edge-lid {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 14px;
+  z-index: 5;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.reader-edge-lid.top {
+  top: 0;
+}
+
+.reader-edge-lid.bottom {
+  bottom: 0;
+}
+
+@media (hover: none) {
+  /* On touch the tap zones already do this, and a 14px strip is a mis-tap. */
+  .reader-edge-lid {
+    display: none;
+  }
+}
+
 @media (max-width: 720px) {
   .reader-bar {
     padding: var(--s-2) var(--s-3);
@@ -1328,12 +1401,12 @@ a {
     gap: var(--s-2);
   }
 
-  .reader-chrome-toggle {
-    display: inline-flex;
-  }
-
   .reader-toc {
     width: 88vw;
+  }
+
+  .reader-settings {
+    width: 100vw;
   }
 }
 

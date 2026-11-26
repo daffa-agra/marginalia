@@ -4,7 +4,7 @@ import type { JournalStore } from '../useJournal';
 import { Icon } from '../components/icons';
 import { ReaderSettingsPanel } from '../components/ReaderSettingsPanel';
 import { loadBookBytes } from '../lib/bookFiles';
-import { chapterHtml, closeBook, openBook } from '../lib/epubBook';
+import { chapterHtml, closeBook, openBook, resolvePath } from '../lib/epubBook';
 import type { ParsedBook } from '../lib/epubBook';
 import {
   bookProgress,
@@ -15,16 +15,39 @@ import {
 } from '../lib/readingPosition';
 import type { ReadingPosition as Position } from '../lib/readingPosition';
 import { buildReaderCss, resolveColumns } from '../lib/readerCss';
-import { fractionToPage, pageToFraction, paginate, showPage } from '../lib/pagination';
-import type { PaginationResult } from '../lib/pagination';
+import {
+  pageForElement,
+  pageForTextFraction,
+  paginate,
+  showPage,
+  textFractionAtPage,
+} from '../lib/pagination';
+import type { PageGeometry } from '../lib/pagination';
 import { useReaderSettings } from '../lib/useReaderSettings';
+
+/** The centre band of a page toggles the chrome, as a fraction of the width. */
+const CENTRE_BAND = { start: 0.375, end: 0.625 };
+/** A pointer that travels further than this is a drag, not a tap. */
+const TAP_SLOP_PX = 15;
+/** A horizontal drag this long is a swipe. */
+const SWIPE_MIN_PX = 48;
 
 /**
  * The reading surface.
  *
- * A chapter renders as one tall document in a sandboxed frame; the pagination
- * module carves it into pages that fit. Position is stored as (chapter,
- * fraction-of-pages), so it survives a reflow, a font change and a reload.
+ * A chapter renders as one document in a sandboxed frame; the pagination module
+ * carves it into pages. Position is stored as (chapter, fraction of the
+ * chapter's text), so it survives a reflow, a font change and a reload.
+ *
+ * Navigation follows the conventions readers expect from Readest, foliate and
+ * Apple Books:
+ *
+ *   - tap the left or right third of the page to turn it, the middle to toggle
+ *     the chrome; drag horizontally to swipe
+ *   - the header and footer overlay the page instead of shrinking it, so a page
+ *     never reflows just because the chrome appeared
+ *   - links inside the book are handled by the reader, never by the frame, so an
+ *     internal link navigates instead of replacing the page with a 404
  */
 export function ReaderView({
   book,
@@ -41,19 +64,39 @@ export function ReaderView({
   const [parsed, setParsed] = useState<ParsedBook | null>(null);
   const [chapterIndex, setChapterIndex] = useState(0);
   const [pageIndex, setPageIndex] = useState(0);
-  const [pages, setPages] = useState<PaginationResult | null>(null);
+  const [geometry, setGeometry] = useState<PageGeometry | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [tocOpen, setTocOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ready, setReady] = useState(false);
+  const [chromeVisible, setChromeVisible] = useState(true);
+  const [stageWidth, setStageWidth] = useState(0);
 
   const frameRef = useRef<HTMLIFrameElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const bufferRef = useRef<ArrayBuffer | null>(null);
+
+  /** Where to land once the next chapter has laid out. */
   const pendingFraction = useRef(0);
+  /** Element id to land on once the chapter has laid out. */
+  const pendingFragment = useRef<string | null>(null);
+  const geometryRef = useRef<PageGeometry | null>(null);
+  /** Chapter currently rendered in the frame, for telling a reflow from a jump. */
+  const renderedChapter = useRef<number | null>(null);
+  const pageIndexRef = useRef(0);
+  const pointerStart = useRef<{ x: number; y: number; t: number } | null>(null);
+  /** Accumulated wheel delta, so a trackpad flick turns one page, not six. */
+  const wheelAccum = useRef(0);
+  const wheelLock = useRef(0);
+  /** Late-bound handlers: the frame outlives the render that created it. */
+  const keyHandlerRef = useRef<(event: KeyboardEvent) => void>(() => {});
+  const linkHandlerRef = useRef<(href: string) => void>(() => {});
+  const gestureHandlerRef = useRef<(direction: 1 | -1 | 0, clientX: number) => void>(() => {});
+  const turnPageRef = useRef<(direction: 1 | -1) => void>(() => {});
 
   const total = parsed?.chapters.length ?? 0;
+  pageIndexRef.current = pageIndex;
 
   /* ── open the archive ── */
   useEffect(() => {
@@ -90,6 +133,7 @@ export function ReaderView({
     return () => {
       cancelled = true;
     };
+    // Reopens only when a different book is selected.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [book.id]);
 
@@ -102,11 +146,19 @@ export function ReaderView({
     };
   }, []);
 
-  /* ── CSS derived from typography ── */
-  const columns = useMemo(() => {
-    const width = stageRef.current?.clientWidth ?? window.innerWidth;
-    return resolveColumns(settings.columns, width, typography.fontSizePx);
-  }, [settings.columns, typography.fontSizePx, ready]);
+  /* ── how many columns a page holds ── */
+  // Measured from the live stage width, so "auto" reacts to the window without
+  // the reader having to guess at a breakpoint.
+  const columns = useMemo<1 | 2>(
+    () =>
+      resolveColumns(
+        settings.columns,
+        stageWidth || window.innerWidth,
+        typography.fontSizePx,
+        typography.measureCh,
+      ),
+    [settings.columns, stageWidth, typography.fontSizePx, typography.measureCh],
+  );
 
   const readerCss = useMemo(
     () => buildReaderCss({ typography, mode: settings.mode, theme: settings.theme, columns }),
@@ -125,31 +177,63 @@ export function ReaderView({
     [book, store, total],
   );
 
-  /* ── render the chapter, then paginate ── */
+  /* ── measure, then place the reader ── */
   const repaginate = useCallback(() => {
-    const frame = frameRef.current;
-    const doc = frame?.contentDocument;
+    const doc = frameRef.current?.contentDocument;
     const stage = stageRef.current;
     if (!doc || !doc.body || !stage) return;
     const width = stage.clientWidth;
     const height = stage.clientHeight;
     if (width === 0 || height === 0) return;
 
-    const result = paginate(doc, width, height);
-    setPages(result);
-    const target = fractionToPage(pendingFraction.current, result.pageCount);
-    setPageIndex(target);
-    showPage(doc, target, result);
-    pendingFraction.current = 0;
-    setReady(true);
-  }, []);
+    const next = paginate(doc, width, height, columns);
+    setGeometry(next);
+    geometryRef.current = next;
 
+    // Land on the requested place: a fragment if we have one, else the stored
+    // fraction. Resolving through the text keeps the reader on the same words
+    // even though the page count has changed underneath them.
+    let target: number;
+    if (pendingFragment.current) {
+      const el = doc.getElementById(pendingFragment.current);
+      target = el ? pageForElement(doc, el, next) : resolveFraction(pendingFraction.current);
+      pendingFragment.current = null;
+    } else {
+      target = resolveFraction(pendingFraction.current);
+    }
+    pendingFraction.current = 0;
+
+    setPageIndex(target);
+    pageIndexRef.current = target;
+    showPage(doc, target, next);
+    setReady(true);
+
+    function resolveFraction(fraction: number): number {
+      if (fraction <= 0) return 0;
+      // A fraction of 1 means "the end of the chapter", used when turning back.
+      if (fraction >= 1) return Math.max(0, next.pageCount - 1);
+      return pageForTextFraction(doc!, fraction, next);
+    }
+  }, [columns]);
+
+  /* ── render the chapter ── */
   useEffect(() => {
     if (!parsed || !bufferRef.current) return;
     const chapter = parsed.chapters[chapterIndex];
     if (!chapter) return;
     let cancelled = false;
+
+    // A reflow of the same chapter (a font change, a new column count) must not
+    // lose the reader's place: record the text fraction before the old document
+    // is thrown away. A chapter change brings its own pending fraction.
+    const doc = frameRef.current?.contentDocument;
+    const current = geometryRef.current;
+    if (renderedChapter.current === chapterIndex && doc && current) {
+      pendingFraction.current = textFractionAtPage(doc, pageIndexRef.current, current);
+    }
+    renderedChapter.current = chapterIndex;
     setReady(false);
+
     (async () => {
       try {
         const html = await chapterHtml(parsed, chapter, bufferRef.current!, readerCss);
@@ -165,134 +249,316 @@ export function ReaderView({
     };
   }, [parsed, chapterIndex, readerCss]);
 
-  /** Attach the same keys to the book document whenever a chapter loads. */
-  const attachFrameKeys = useCallback(() => {
-    const doc = frameRef.current?.contentDocument;
-    if (!doc) return;
+  /* ── inside the book: keys, taps, swipes, links ── */
+  const attachFrameHandlers = useCallback(() => {
+    const frame = frameRef.current;
+    const doc = frame?.contentDocument;
+    if (!doc || !frame) return;
+
     doc.addEventListener('keydown', (event) => keyHandlerRef.current(event));
-  }, []);
+
+    // A mouse wheel is a page turn in a paginated book, not a scroll: there is
+    // nowhere to scroll to. The delta is accumulated so a trackpad flick is one
+    // page rather than one page per event.
+    doc.addEventListener(
+      'wheel',
+      (event) => {
+        // A mostly-horizontal wheel turns sideways.
+        const horizontal = Math.abs(event.deltaX) > Math.abs(event.deltaY);
+        const delta = horizontal ? event.deltaX : event.deltaY;
+        if (delta === 0) return;
+        event.preventDefault();
+        const now = Date.now();
+        if (now < wheelLock.current) return;
+        wheelAccum.current += delta;
+        if (Math.abs(wheelAccum.current) < 40) return;
+        turnPageRef.current(wheelAccum.current > 0 ? 1 : -1);
+        wheelAccum.current = 0;
+        wheelLock.current = now + 220;
+      },
+      { passive: false },
+    );
+
+    doc.addEventListener('pointerdown', (event) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      pointerStart.current = { x: event.clientX, y: event.clientY, t: Date.now() };
+    });
+
+    doc.addEventListener('pointerup', (event) => {
+      const start = pointerStart.current;
+      pointerStart.current = null;
+      if (!start) return;
+      // A text selection is the reader's, not ours to override.
+      const selection = doc.getSelection();
+      if (selection && !selection.isCollapsed && selection.toString().trim()) return;
+      const dx = event.clientX - start.x;
+      const dy = event.clientY - start.y;
+      const elapsed = Date.now() - start.t;
+      if (elapsed < 900 && Math.abs(dx) > SWIPE_MIN_PX && Math.abs(dx) > Math.abs(dy) * 1.4) {
+        gestureHandlerRef.current(dx < 0 ? 1 : -1, event.clientX);
+        return;
+      }      if (Math.abs(dx) > TAP_SLOP_PX || Math.abs(dy) > TAP_SLOP_PX) return;
+      gestureHandlerRef.current(0, event.clientX);
+    });
+
+    // The reader owns navigation; the frame itself must never navigate away.
+    doc.addEventListener('click', (event) => {
+      const anchor = (event.target as Element | null)?.closest?.('a');
+      if (!anchor) return;
+      const href = anchor.getAttribute('href');
+      if (!href) return;
+      event.preventDefault();
+      if (/^(https?:|mailto:)/i.test(href)) return;
+      if (href.startsWith('#')) {
+        const el = doc.getElementById(href.slice(1));
+        if (el) {
+          const current = geometryRef.current;
+          if (current) {
+            const page = pageForElement(doc, el, current);
+            setPageIndex(page);
+            pageIndexRef.current = page;
+            showPage(doc, page, current);
+            persistPosition(chapterIndex, textFractionAtPage(doc, page, current));
+          }
+        }
+        return;
+      }
+      linkHandlerRef.current(href);
+    });
+  }, [chapterIndex, persistPosition]);
 
   const onFrameLoad = useCallback(() => {
-    // Give the frame a tick to lay out fonts and images before measuring.
+    // Give the frame a tick for fonts and images before measuring.
     window.setTimeout(() => {
       repaginate();
-      attachFrameKeys();
+      attachFrameHandlers();
     }, 60);
-  }, [repaginate, attachFrameKeys]);
+  }, [repaginate, attachFrameHandlers]);
 
-  /* ── re-measure on resize ── */
+  /* ── stage size, for "auto" columns and for reflowing on resize ── */
   useEffect(() => {
-    if (!ready) return;
-    const onResize = () => {
-      const doc = frameRef.current?.contentDocument;
-      if (!doc) return;
-      const result = paginate(
-        doc,
-        stageRef.current?.clientWidth ?? 0,
-        stageRef.current?.clientHeight ?? 0,
-      );
-      setPages(result);
-      const clamped = Math.min(pageIndex, result.pageCount - 1);
-      setPageIndex(clamped);
-      showPage(doc, clamped, result);
-    };
+    const stage = stageRef.current;
+    if (!stage) return;
     let timer: number | undefined;
-    const debounced = () => {
+    let lastWidth = stage.clientWidth;
+    const observer = new ResizeObserver(() => {
+      const width = stage.clientWidth;
+      setStageWidth(width);
+      if (width === lastWidth) return;
+      lastWidth = width;
       if (timer) window.clearTimeout(timer);
-      timer = window.setTimeout(onResize, 180);
-    };
-    window.addEventListener('resize', debounced);
+      // Re-measure after the resize settles, keeping the reader's place.
+      timer = window.setTimeout(() => {
+        const doc = frameRef.current?.contentDocument;
+        const current = geometryRef.current;
+        if (doc && current) {
+          pendingFraction.current = textFractionAtPage(doc, pageIndexRef.current, current);
+        }
+        repaginate();
+      }, 160);
+    });
+    observer.observe(stage);
     return () => {
-      window.removeEventListener('resize', debounced);
+      observer.disconnect();
       if (timer) window.clearTimeout(timer);
     };
-  }, [ready, pageIndex]);
+  }, [repaginate]);
+
+  /**
+   * Chrome is hidden only by a deliberate act — a centre tap, Escape, or a
+   * swipe — never by an idle timer. A timer would fade the controls out while
+   * the reader is still deciding, and Readest deliberately has none.
+   */
+  const toggleChrome = useCallback(() => {
+    setChromeVisible((visible) => !visible);
+    setTocOpen(false);
+    setSettingsOpen(false);
+  }, []);
 
   const goToPage = useCallback(
     (next: number) => {
-      if (!pages) return;
-      const clamped = Math.max(0, Math.min(pages.pageCount - 1, next));
-      setPageIndex(clamped);
+      const current = geometryRef.current;
       const doc = frameRef.current?.contentDocument;
-      if (doc) showPage(doc, clamped, pages);
-      persistPosition(chapterIndex, pageToFraction(clamped, pages.pageCount));
+      if (!current || !doc) return;
+      const clamped = Math.max(0, Math.min(current.pageCount - 1, next));
+      setPageIndex(clamped);
+      pageIndexRef.current = clamped;
+      showPage(doc, clamped, current);
+      persistPosition(chapterIndex, textFractionAtPage(doc, clamped, current));
     },
-    [pages, chapterIndex, persistPosition],
+    [chapterIndex, persistPosition],
+  );
+
+  const goToChapter = useCallback(
+    (index: number, fraction = 0, fragment: string | null = null) => {
+      if (!parsed) return;
+      const clamped = Math.max(0, Math.min(parsed.chapters.length - 1, index));
+      pendingFraction.current = fraction;
+      pendingFragment.current = fragment;
+      setTocOpen(false);
+      persistPosition(clamped, fraction);
+      if (clamped === chapterIndex) {
+        // Already there: resolve the anchor in place.
+        repaginate();
+        return;
+      }
+      setChapterIndex(clamped);
+    },
+    [parsed, chapterIndex, persistPosition, repaginate],
   );
 
   const turnPage = useCallback(
     (direction: 1 | -1) => {
-      if (!pages) return;
-      const next = pageIndex + direction;
+      const current = geometryRef.current;
+      if (!current || !parsed) return;
+      const next = pageIndexRef.current + direction;
+
       if (next < 0) {
         if (chapterIndex > 0) {
           pendingFraction.current = 1;
-          setChapterIndex(chapterIndex - 1);
           persistPosition(chapterIndex - 1, 1);
+          setChapterIndex(chapterIndex - 1);
         }
         return;
       }
-      if (next >= pages.pageCount) {
-        if (parsed && chapterIndex < parsed.chapters.length - 1) {
+      if (next >= current.pageCount) {
+        if (chapterIndex < parsed.chapters.length - 1) {
           pendingFraction.current = 0;
-          setChapterIndex(chapterIndex + 1);
           persistPosition(chapterIndex + 1, 0);
+          setChapterIndex(chapterIndex + 1);
         }
         return;
       }
       goToPage(next);
     },
-    [pages, pageIndex, chapterIndex, parsed, goToPage, persistPosition],
+    [parsed, chapterIndex, goToPage, persistPosition],
   );
 
-  /* ── keyboard ── */
-  // Keys must work whether focus is in the app or inside the book, because a
-  // reader clicks the text far more often than the chrome. A keydown inside
-  // the iframe never reaches the parent window, so both are listened to.
-  const keyHandlerRef = useRef<(event: KeyboardEvent) => void>(() => {});
+  /** A relative link inside the book: the same chapter, or another one. */
+  const followLink = useCallback(
+    (href: string) => {
+      if (!parsed) return;
+      const [rawPath, fragment] = href.split('#');
+      if (!rawPath && fragment) {
+        const doc = frameRef.current?.contentDocument;
+        const current = geometryRef.current;
+        const el = doc?.getElementById(fragment);
+        if (doc && current && el) {
+          const page = pageForElement(doc, el, current);
+          setPageIndex(page);
+          pageIndexRef.current = page;
+          showPage(doc, page, current);
+          persistPosition(chapterIndex, textFractionAtPage(doc, page, current));
+        }
+        return;
+      }
+      const chapter = parsed.chapters[chapterIndex];
+      if (!chapter) return;
+      const baseDir = chapter.path.includes('/')
+        ? chapter.path.slice(0, chapter.path.lastIndexOf('/') + 1)
+        : '';
+      const resolved = resolvePath(baseDir, rawPath);
+      const target = parsed.chapters.findIndex((c) => c.path === resolved);
+      // A link outside the spine is not navigable from here, and silently
+      // replacing the page with a 404 would be worse than doing nothing.
+      if (target < 0) return;
+      goToChapter(target, 0, fragment || null);
+    },
+    [parsed, chapterIndex, goToChapter, persistPosition],
+  );
 
+  /* ── gestures: tap zones and swipes ── */
+  useEffect(() => {
+    gestureHandlerRef.current = (direction, clientX) => {
+      const stage = stageRef.current;
+      const current = geometryRef.current;
+      if (!stage) return;
+      if (direction !== 0) {
+        turnPage(direction);
+        return;
+      }
+      // Zones are measured on the column the tap landed in, not on the whole
+      // page. In a two-column spread the centre of the spread is the gutter and
+      // is neutral, so each column keeps its own left/centre/right thirds.
+      const rect = stage.getBoundingClientRect();
+      const lanes = current?.columnsPerPage ?? 1;
+      const laneWidth = 1 / lanes;
+      // Position within the column that was tapped.
+      const within = ((clientX - rect.left) / rect.width) % laneWidth;
+      const ratio = within / laneWidth;
+      if (ratio < CENTRE_BAND.start) {
+        turnPage(-1);
+      } else if (ratio > CENTRE_BAND.end) {
+        turnPage(1);
+      } else {
+        // The middle of the page is the chrome toggle, never a page turn.
+        toggleChrome();
+      }
+    };
+  }, [turnPage, toggleChrome]);
+
+  /* ── keyboard ── */
+  // Keys must work whether focus is in the app or inside the book: a reader
+  // clicks the text far more often than the chrome, and a keydown inside the
+  // iframe never reaches the parent window.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+
       if (event.key === 'Escape') {
         if (settingsOpen) setSettingsOpen(false);
         else if (tocOpen) setTocOpen(false);
         else onBack();
         return;
       }
-      if (event.key.toLowerCase() === 't') {
-        setTocOpen((v) => !v);
+      const key = event.key.toLowerCase();
+      if (key === 't') {
+        setTocOpen((open) => !open);
+        setSettingsOpen(false);
+        setChromeVisible(true);
         return;
       }
       if (event.key === 'ArrowRight' || event.key === 'PageDown' || event.key === ' ') {
         event.preventDefault();
         turnPage(1);
+        return;
       }
       if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
         event.preventDefault();
         turnPage(-1);
+        return;
+      }
+      if (event.key === 'Home') {
+        event.preventDefault();
+        goToChapter(chapterIndex, 0);
+        return;
+      }
+      if (event.key === 'End') {
+        event.preventDefault();
+        goToChapter(chapterIndex, 1);
       }
     };
     keyHandlerRef.current = onKey;
+    linkHandlerRef.current = followLink;
+    turnPageRef.current = turnPage;
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [turnPage, onBack, tocOpen, settingsOpen]);
+  }, [turnPage, onBack, tocOpen, settingsOpen, goToChapter, chapterIndex, followLink]);
 
+  /* ── progress ── */
+  const percent = useMemo(() => {
+    const doc = frameRef.current?.contentDocument;
+    if (doc && geometry) {
+      const fraction = textFractionAtPage(doc, pageIndex, geometry);
+      return bookProgress({ chapter: chapterIndex, fraction, updatedAt: 0 }, total || 1);
+    }
+    return bookProgress(book.position ?? null, total || 1);
+    // `ready` and `chapterIndex` change when the document does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [book.position, chapterIndex, pageIndex, geometry, total, ready]);
 
-  const goToChapter = useCallback(
-    (index: number, fraction = 0) => {
-      if (!parsed) return;
-      const clamped = Math.max(0, Math.min(parsed.chapters.length - 1, index));
-      pendingFraction.current = fraction;
-      setChapterIndex(clamped);
-      persistPosition(clamped, fraction);
-      setTocOpen(false);
-    },
-    [parsed, persistPosition],
-  );
-
-  const percent = pages
-    ? bookProgress({ chapter: chapterIndex, fraction: pageToFraction(pageIndex, pages.pageCount), updatedAt: 0 }, total || 1)
-    : bookProgress(book.position ?? null, total || 1);
+  const opening = loading || (!ready && !error);
 
   if (error) {
     return (
@@ -310,8 +576,12 @@ export function ReaderView({
   }
 
   return (
-    <section className="reader" aria-label={`Reading ${book.title}`} data-theme-reader={settings.theme}>
-      <header className="reader-bar">
+    <section
+      className={chromeVisible ? 'reader chrome-visible' : 'reader'}
+      aria-label={`Reading ${book.title}`}
+      data-theme-reader={settings.theme}
+    >
+      <header className="reader-bar" inert={!chromeVisible}>
         <button type="button" className="reader-icon-btn" aria-label="Back to book page" onClick={onBack}>
           <Icon name="back" />
         </button>
@@ -320,7 +590,7 @@ export function ReaderView({
           {parsed && (
             <span className="reader-chapter">
               {chapterLabel({ chapter: chapterIndex, fraction: 0, updatedAt: 0 }, parsed.chapters.length)}
-              {pages ? ` · page ${pageIndex + 1} of ${pages.pageCount}` : ''}
+              {geometry ? ` · page ${pageIndex + 1} of ${geometry.pageCount}` : ''}
             </span>
           )}
         </div>
@@ -331,8 +601,9 @@ export function ReaderView({
             aria-label="Table of contents"
             aria-expanded={tocOpen}
             onClick={() => {
-              setTocOpen((v) => !v);
+              setTocOpen((open) => !open);
               setSettingsOpen(false);
+              setChromeVisible(true);
             }}
           >
             <Icon name="shelf" />
@@ -343,8 +614,9 @@ export function ReaderView({
             aria-label="Reading settings"
             aria-expanded={settingsOpen}
             onClick={() => {
-              setSettingsOpen((v) => !v);
+              setSettingsOpen((open) => !open);
               setTocOpen(false);
+              setChromeVisible(true);
             }}
           >
             Aa
@@ -368,6 +640,7 @@ export function ReaderView({
                       type="button"
                       className={targetIndex === chapterIndex ? 'reader-toc-link active' : 'reader-toc-link'}
                       disabled={targetIndex < 0}
+                      aria-current={targetIndex === chapterIndex ? 'location' : undefined}
                       onClick={() => goToChapter(targetIndex, 0)}
                     >
                       {entry.label}
@@ -401,9 +674,32 @@ export function ReaderView({
             onLoad={onFrameLoad}
           />
         )}
+        {opening && !loading && (
+          <div className="reader-loading" role="status">
+            <p className="muted">Setting the page…</p>
+          </div>
+        )}
+        {/* Mouse-only: a thin lid at each edge reveals the chrome without the
+            reader having to find the centre tap zone. */}
+        <button
+          type="button"
+          className="reader-edge-lid top"
+          aria-label="Show reading controls"
+          tabIndex={-1}
+          onMouseEnter={() => setChromeVisible(true)}
+          onClick={() => setChromeVisible(true)}
+        />
+        <button
+          type="button"
+          className="reader-edge-lid bottom"
+          aria-label="Show reading controls"
+          tabIndex={-1}
+          onMouseEnter={() => setChromeVisible(true)}
+          onClick={() => setChromeVisible(true)}
+        />
       </div>
 
-      <footer className="reader-foot">
+      <footer className="reader-foot" inert={!chromeVisible}>
         <button
           type="button"
           className="reader-nav-btn"
@@ -425,12 +721,7 @@ export function ReaderView({
           </div>
           <span className="reader-progress-label numeric">{percent}%</span>
         </div>
-        <button
-          type="button"
-          className="reader-nav-btn"
-          aria-label="Next page"
-          onClick={() => turnPage(1)}
-        >
+        <button type="button" className="reader-nav-btn" aria-label="Next page" onClick={() => turnPage(1)}>
           <Icon name="chevronDown" size={14} />
         </button>
       </footer>

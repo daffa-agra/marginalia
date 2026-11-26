@@ -5,6 +5,7 @@ A personal book journal and EPUB reader — your shelves, notes in the margins, 
 ## What it does today
 
 - **Read EPUBs** — open a DRM-free EPUB and read it **paginated**: chapters in spine order, a table of contents from the book's own nav, embedded images and the book's stylesheet preserved, and a reading position that survives a reload, a font-size change and a repagination. Book content renders in a sandboxed frame with scripts disabled.
+- **Reader that behaves like a reader** — tap the right or left of the page to turn it and the middle to hide the controls, swipe or scroll the wheel to turn, arrow keys / `Home` / `End` / `T` for the contents. The header and footer *overlay* the page, so hiding them never reflows the text. Links inside the book are handled by the reader, so a chapter link navigates instead of replacing the page. Page turns respect `prefers-reduced-motion`.
 - **Reader typography** — per-book settings with a global default: font size, line length, line height, letter/word/paragraph spacing, alignment, hyphenation, margins, a writing margin for notes, column count, and paper/sepia/night themes. A "preserve the book" mode keeps the publisher's own fonts and layout; "my page" overrides them. One button applies WCAG 1.4.12 text spacing.
 - **Reading plan** — queue the books you mean to read next, in order. Undated by design: it says which book is next, not when to read it. The page reports your measured pace and when the queue would empty at that pace.
 - **Shelves** — group books the way you think of them (*Bedside*, *Research*, *Re-read someday*). **One book, one shelf**, like folders: shelf counts always add up to your library. Unshelved is always there, and deleting a shelf moves its books rather than deleting them.
@@ -20,6 +21,7 @@ A personal book journal and EPUB reader — your shelves, notes in the margins, 
 
 - **No sync.** Everything is local to one browser. The planned Cloudflare backend (D1 + R2) is designed but not built.
 - **No annotations yet.** You can read a book, but you cannot yet select a sentence and keep it — the margin-notation work is the next phase.
+- **No scroll mode.** The reader pages; it does not offer continuous scrolling as an alternative.
 - EPUB only. No PDF, MOBI or AZW3, and no DRM-protected files.
 
 ## Running it
@@ -81,6 +83,7 @@ node smoke/shelf-upload-tests.cjs     # shelves and upload in a real browser
 node smoke/plan-ui-tests.cjs          # the reading plan in a real browser
 node smoke/reader-ui-tests.cjs         # reading an EPUB in a real browser
 node smoke/reader-pagination-tests.cjs # pagination and customization in a browser
+node smoke/reader-behaviour-tests.cjs  # page geometry, reflow anchoring, tap zones, links
 node smoke/byte-lifecycle.cjs         # book bytes survive undo, clear on expiry
 node smoke/dev-server-check.cjs       # the dev server serves the app
 ```
@@ -90,7 +93,7 @@ node smoke/dev-server-check.cjs       # the dev server serves the app
 The reader is planned in phases. The architecture and typography specifications are kept as local design notes rather than committed documents.
 
 - **Phase 0** — IndexedDB storage and migration
-- **Phase 1** — the reader: chapters, TOC, typography, position restore *(built; pagination is scrolling, not page-turning)*
+- **Phase 1** — the reader: chapters, TOC, typography, position restore, paginated page turns *(built)*
 - **Phase 2** — selection → margin notes, journaling
 - **Phase 3** — Cloudflare backend: EPUB upload to R2, shelves end to end
 - **Phase 4** — metadata sync across devices
@@ -112,6 +115,11 @@ src/
   useJournal.ts         App-wide store
   lib/
     epub.ts             EPUB metadata extraction (container → OPF → cover)
+    epubBook.ts         EPUB reading: spine, TOC, chapters, resource rewriting
+    pagination.ts       Page geometry, column layout, text anchors
+    readingPosition.ts  (chapter, fraction) positions and progress
+    readerCss.ts        Reader typography → the page's CSS; column count
+    readerSettings.ts   Typography defaults, presets, limits, AA spacing
     zip.ts              Minimal ZIP reader (stored + deflate)
     bookFiles.ts        EPUB bytes in IndexedDB, quota and persistence
     plan.ts             Reading plan queue, measured pace, forecast

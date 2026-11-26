@@ -52,15 +52,22 @@ async function openReader(page) {
     const doc = frame.contentDocument;
     const body = doc.body;
     const style = doc.defaultView.getComputedStyle(body);
+    const rootStyle = doc.defaultView.getComputedStyle(doc.documentElement);
     return {
       columns: style.columnWidth,
-      overflow: style.overflow,
-      transform: style.transform,
+      bodyOverflow: style.overflow,
+      rootOverflow: rootStyle.overflow,
       heightFixed: style.height,
+      // The inline style, because the computed value normalises to a matrix.
+      transform: body.style.transform,
     };
   });
   check('content is laid out in columns', layout.columns !== 'auto' && layout.columns !== '', JSON.stringify(layout.columns));
-  check('frame clips overflow instead of scrolling', layout.overflow === 'hidden', String(layout.overflow));
+  // The page is clipped at the root, which is what stops the long column strip
+  // from scrolling into view. The body itself must stay `visible`: hiding it
+  // would clip the columns to their own paint box.
+  check('the page clips overflow instead of scrolling', layout.rootOverflow === 'hidden', String(layout.rootOverflow));
+  check('the page is translated, not scrolled', /translateX/.test(layout.transform), layout.transform);
 
   /* --- turning pages --- */
   const firstTransform = await page.evaluate(() => {
@@ -151,10 +158,20 @@ async function openReader(page) {
   await page.waitForTimeout(1200);
   const nightColours = await page.evaluate(() => {
     const doc = document.querySelector('.reader-frame').contentDocument;
-    const s = doc.defaultView.getComputedStyle(doc.body);
-    return { color: s.color, background: s.backgroundColor };
+    const bodyStyle = doc.defaultView.getComputedStyle(doc.body);
+    return {
+      color: bodyStyle.color,
+      background: bodyStyle.backgroundColor,
+      htmlBackground: doc.defaultView.getComputedStyle(doc.documentElement).backgroundColor,
+    };
   });
-  check('night theme recolours the page', nightColours.background === 'rgb(20, 17, 14)', JSON.stringify(nightColours));
+  // The page must paint its own surface, not inherit whatever is behind the
+  // frame: a transparent body renders light text on a white surround.
+  check(
+    'night theme recolours the page',
+    nightColours.background === 'rgb(20, 17, 14)' && nightColours.htmlBackground === 'rgb(20, 17, 14)',
+    JSON.stringify(nightColours),
+  );
 
   /* --- per-book scope --- */
   // A change has now been made on this book, so the panel should say so.

@@ -132,13 +132,32 @@ const { buildReaderCss, resolveColumns, THEMES } = require(path.join(dist, 'lib'
 
 /* --- column resolution --- */
 {
-  assert.strictEqual(resolveColumns(1, 2000, 18), 1, 'one column when asked');
+  // The anchor rule: fit as many ideal columns as the width allows, up to two,
+  // but never split into columns below the comfort floor.
+  assert.strictEqual(resolveColumns(1, 2000, 18), 1, 'one column when asked, however wide');
   assert.strictEqual(resolveColumns(2, 2000, 18), 2, 'two columns when there is room');
-  assert.strictEqual(resolveColumns(2, 500, 18), 1, 'two columns falls back when narrow');
   assert.strictEqual(resolveColumns('auto', 2000, 18), 2, 'auto uses two when wide');
   assert.strictEqual(resolveColumns('auto', 400, 18), 1, 'auto uses one when narrow');
-  // Larger text needs more room per column.
-  assert.strictEqual(resolveColumns('auto', 1200, 30), 1, 'large text drops to one column');
+  // Two columns of ~39 characters each are worse than one full column.
+  assert.strictEqual(resolveColumns(2, 700, 18), 1, 'a narrow window refuses a cramped spread');
+  // The floor is in characters, so it scales with the type: 1280px is two
+  // comfortable ~53-character columns at 24px, but the same width at 32px is
+  // only ~40 characters each and still acceptable, while 900px at 32px is not.
+  assert.strictEqual(resolveColumns('auto', 1280, 24), 2, 'a wide window spreads medium type');
+  assert.strictEqual(resolveColumns('auto', 900, 32), 1, 'huge type in a small window stays one column');
+  assert.strictEqual(resolveColumns('auto', 1280, 32), 2, 'huge type in a wide window still fits two');
+  // At a normal size the spread appears once each column still beats the floor:
+  // 700px would give two 39-character columns (too cramped), 800px gives ~44.
+  assert.strictEqual(resolveColumns('auto', 700, 18), 1, 'a cramped window keeps one column');
+  assert.strictEqual(resolveColumns('auto', 800, 18), 2, 'a wider window spreads normal type');
+  assert.strictEqual(resolveColumns('auto', 1280, 18), 2, 'a wide window spreads normal type');
+  // Wider windows never reduce the column count.
+  let previous = 0;
+  for (const width of [400, 700, 900, 1280, 1600, 2000]) {
+    const n = resolveColumns('auto', width, 18);
+    assert.ok(n >= previous, `width ${width} did not reduce columns`);
+    previous = n;
+  }
   console.log('✓ column count adapts to width and font size');
 }
 
