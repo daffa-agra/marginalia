@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Book, JournalData, Quote, Shelf } from './types';
 import {
-  loadData,
-  saveData,
-  hasStoredJournal,
-  probeStorage,
+  makeShelf,
   getStorageHealth,
   subscribeStorageHealth,
-  makeShelf,
+  publishStorageHealth,
   type StorageHealth,
 } from './storage';
+import { bootStorage } from './lib/boot';
+import { clearDurableJournal, diffJournal, persistDiff, type JournalDiff } from './lib/journalStore';
+import { isIdbAvailable } from './lib/idb';
 import { sampleData } from './sampleData';
 import { makeId } from './lib/utils';
 
@@ -19,6 +19,28 @@ function isSample(data: JournalData): boolean {
   return (
     data.books.some((b) => b.id.startsWith(SAMPLE_PREFIX)) ||
     data.quotes.some((q) => q.id.startsWith('demo-quote-'))
+  );
+}
+
+/** v3 records always carry sync bookkeeping, even for samples. */
+function withStamps(d: JournalData): JournalData {
+  const ensure = <T extends { createdAt: number; updatedAt?: number; deletedAt?: number }>(r: T): T =>
+    r.updatedAt != null ? r : ({ ...r, updatedAt: r.createdAt } as T);
+  return {
+    ...d,
+    books: d.books.map(ensure),
+    quotes: d.quotes.map(ensure),
+    shelves: d.shelves.map(ensure),
+    entries: d.entries.map(ensure),
+  };
+}
+
+function diffIsEmpty(diff: JournalDiff): boolean {
+  return (
+    diff.books.length === 0 &&
+    diff.quotes.length === 0 &&
+    diff.shelves.length === 0 &&
+    diff.entries.length === 0
   );
 }
 
@@ -40,50 +62,106 @@ function withoutSample(data: JournalData): JournalData {
  * write is published to the UI instead of being swallowed.
  */
 export function useJournal() {
+  // First launch only: an in-memory sample so no screen starts empty.
+  // It is never written to storage unless the reader chooses to keep it.
   const [data, setData] = useState<JournalData>(() => {
-    if (hasStoredJournal()) return loadData();
-    // First launch only: an in-memory sample so no screen starts empty.
-    // It is never written to storage unless the reader chooses to keep it.
     const sample = sampleData();
-    return { version: 1, books: sample.books, quotes: sample.quotes, shelves: [] };
+    return { version: 3, books: sample.books, quotes: sample.quotes, shelves: [], entries: [] };
   });
-  const [hasStored, setHasStored] = useState(() => hasStoredJournal());
-  const [health, setHealth] = useState<StorageHealth>(() => {
-    probeStorage();
-    return getStorageHealth();
-  });
+  const [hasStored, setHasStored] = useState(false);
+  const [booted, setBooted] = useState(false);
+  const [health, setHealth] = useState<StorageHealth>(getStorageHealth);
   const hasStoredRef = useRef(hasStored);
   hasStoredRef.current = hasStored;
+  const persistedRef = useRef<JournalData | null>(null);
+  const persistSeqRef = useRef(0);
 
   useEffect(() => subscribeStorageHealth(setHealth), []);
+
+  // Boot: migration (if any) + load from IndexedDB. Runs once.
+  useEffect(() => {
+    let cancelled = false;
+    // Ask for durable storage once: without it the browser may evict cached
+    // books after a while. A denial is not an error; the UI notes it.
+    if (typeof navigator !== 'undefined' && navigator.storage?.persist) {
+      navigator.storage.persist().catch(() => {});
+    }
+    bootStorage()
+      .then((result) => {
+        if (cancelled) return;
+        setBooted(true);
+        if (result.blocked) {
+          publishStorageHealth({ writable: false, blocked: true, failedAt: Date.now() });
+          return;
+        }
+        if (result.error) {
+          console.error('Storage boot reported an error.', result.error);
+        }
+        if (result.data && (result.data.books.length || result.data.quotes.length || result.data.shelves.length || result.data.entries.length)) {
+          setHasStored(true);
+          persistedRef.current = result.data;
+          setData(withStamps(result.data));
+          publishStorageHealth({ writable: true, blocked: false, lastSavedAt: Date.now() });
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setBooted(true);
+        console.error('Failed to load journal from IndexedDB.', err);
+        publishStorageHealth({ writable: false, blocked: true, failedAt: Date.now() });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   /** Any edit turns the sample shelf into a real journal, minus the sample. */
   const mutate = useCallback((updater: (current: JournalData) => JournalData) => {
     const firstWrite = !hasStoredRef.current;
     setData((current) => {
       const next = updater(current);
-      return firstWrite ? withoutSample(next) : next;
+      return firstWrite ? withoutSample(withStamps(next)) : next;
     });
     setHasStored(true);
   }, []);
 
-  // Persist only once there is a journal of the reader's own.
+  // Persist: a record-level diff against what is already durable. A failed
+  // write is published to the UI instead of being swallowed.
   useEffect(() => {
-    if (!hasStored) return;
-    saveData(data);
+    if (!hasStored || !isIdbAvailable()) return;
+    const seq = ++persistSeqRef.current;
+    const diff = diffJournal(persistedRef.current, data, Date.now());
+    if (diffIsEmpty(diff)) return;
+    persistDiff(diff)
+      .then(() => {
+        if (seq !== persistSeqRef.current) return;
+        persistedRef.current = data;
+        publishStorageHealth({ writable: true, blocked: false, lastSavedAt: Date.now(), failedAt: null });
+      })
+      .catch((err) => {
+        console.error('Failed to save journal data.', err);
+        publishStorageHealth({ writable: false, failedAt: Date.now() });
+      });
   }, [data, hasStored]);
 
   const persistNow = useCallback(() => {
     setHasStored(true);
-    setData((current) => {
-      saveData(current);
-      return current;
-    });
-  }, []);
+    const diff = diffJournal(persistedRef.current, data, Date.now());
+    if (diffIsEmpty(diff)) return;
+    persistDiff(diff)
+      .then(() => {
+        persistedRef.current = data;
+        publishStorageHealth({ writable: true, blocked: false, lastSavedAt: Date.now() });
+      })
+      .catch((err) => {
+        console.error('Failed to save journal data.', err);
+        publishStorageHealth({ writable: false, failedAt: Date.now() });
+      });
+  }, [data]);
 
   const addBook = useCallback(
-    (input: Omit<Book, 'id' | 'createdAt'>): Book => {
-      const book: Book = { ...input, id: makeId('b'), createdAt: Date.now() };
+    (input: Omit<Book, 'id' | 'createdAt' | 'updatedAt'>): Book => {
+      const book: Book = { ...input, id: makeId('b'), createdAt: Date.now(), updatedAt: Date.now() };
       mutate((d) => ({ ...d, books: [book, ...d.books] }));
       return book;
     },
@@ -219,17 +297,21 @@ export function useJournal() {
   );
 
   const addQuotes = useCallback(
-    (bookId: string, quotes: Array<Omit<Quote, 'id' | 'createdAt' | 'bookId'>>) => {
+    (bookId: string, quotes: Array<Omit<Quote, 'id' | 'createdAt' | 'updatedAt' | 'bookId'>>) => {
       mutate((d) => ({
         ...d,
         quotes: [
           ...d.quotes,
-          ...quotes.map((q) => ({
-            ...q,
-            bookId,
-            id: makeId('q'),
-            createdAt: Date.now(),
-          })),
+          ...quotes.map((q) => {
+            const now = Date.now();
+            return {
+              ...q,
+              bookId,
+              id: makeId('q'),
+              createdAt: now,
+              updatedAt: now,
+            };
+          }),
         ],
       }));
     },
@@ -279,9 +361,11 @@ export function useJournal() {
     } catch {
       // Ignore storage failures; resetting in memory is enough.
     }
+    clearDurableJournal().catch((err) => console.error('Failed to clear durable journal.', err));
     const sample = sampleData();
     setHasStored(false);
-    setData({ version: 1, books: sample.books, quotes: sample.quotes, shelves: [] });
+    persistedRef.current = null;
+    setData({ version: 3, books: sample.books, quotes: sample.quotes, shelves: [], entries: [] });
   }, []);
 
   const quotesByBook = useMemo(() => {
@@ -296,6 +380,8 @@ export function useJournal() {
 
   return {
     data,
+    booted,
+    persisted: hasStored,
     quotesByBook,
     isDemo: !hasStored && isSample(data),
     health,

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useJournal } from './useJournal';
+import { ReaderView } from './reader/ReaderView';
 import { LibraryView } from './views/LibraryView';
 import { StatsView } from './views/StatsView';
 import { QuotesView } from './views/QuotesView';
@@ -30,6 +31,7 @@ export default function App() {
   const { toasts, notify, dismiss } = useToasts();
   const [view, setView] = useState<View>('library');
   const [openBookId, setOpenBookId] = useState<string | null>(null);
+  const [readingBookId, setReadingBookId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [dataOpen, setDataOpen] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -40,6 +42,15 @@ export default function App() {
     setOpenBookId(id);
     setMoreOpen(false);
     window.scrollTo({ top: 0 });
+  }, []);
+
+  const readBook = useCallback((id: string) => {
+    setReadingBookId(id);
+    window.scrollTo({ top: 0 });
+  }, []);
+
+  const closeReader = useCallback(() => {
+    setReadingBookId(null);
   }, []);
 
   const goLibrary = useCallback(() => {
@@ -92,6 +103,14 @@ export default function App() {
       document.removeEventListener('drop', onDrop);
     };
   }, []);
+
+  const readingBook = readingBookId ? store.data.books.find((b) => b.id === readingBookId) : null;
+
+  if (readingBook) {
+    return (
+      <ReaderView book={readingBook} onBack={closeReader} />
+    );
+  }
 
   const quoteCount = store.data.quotes.length;
   const bookCount = store.data.books.length;
@@ -205,7 +224,13 @@ export default function App() {
 
       <main id="main" className="app-main" tabIndex={-1}>
         {openBookId ? (
-          <BookDetailView bookId={openBookId} store={store} onBack={goLibrary} notify={notify} />
+          <BookDetailView
+            bookId={openBookId}
+            store={store}
+            onBack={goLibrary}
+            notify={notify}
+            onRead={readBook}
+          />
         ) : view === 'library' ? (
           <LibraryView store={store} onOpenBook={openBook} notify={notify} />
         ) : view === 'stats' ? (

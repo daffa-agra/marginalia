@@ -10,6 +10,10 @@ export interface Shelf {
   /** Manual order of the shelves themselves. */
   sortOrder: number;
   createdAt: number;
+  /** Unix ms of the last edit (renames reorder across devices). */
+  updatedAt: number;
+  /** Set when deleted; its books fall back to Unshelved. */
+  deletedAt?: number;
 }
 
 /** The shelf id every book carries when it is on no shelf of its own. */
@@ -20,7 +24,10 @@ export interface EpubFile {
   fileName: string;
   size: number;
   /** Where the bytes live right now. */
-  storage: 'local';
+  storage: 'local' | 'local-only' | 'r2';
+  /** Content hash; makes uploads to the server idempotent. */
+  sha256?: string;
+  uploadedAt?: number;
 }
 
 export interface Book {
@@ -49,6 +56,10 @@ export interface Book {
   file?: EpubFile;
   /** Unix ms when the book was added to the journal. */
   createdAt: number;
+  /** Unix ms of the last edit; sync compares this, never createdAt. */
+  updatedAt: number;
+  /** Set when deleted; the row is kept as a tombstone so deletes propagate. */
+  deletedAt?: number;
 }
 
 export interface Quote {
@@ -60,6 +71,27 @@ export interface Quote {
   position?: string;
   /** Unix ms. */
   createdAt: number;
+  /** Unix ms of the last edit. */
+  updatedAt: number;
+  /** Set when deleted; kept as a tombstone for sync. */
+  deletedAt?: number;
+}
+
+/** A journal entry — the free-form writing the journal is about. */
+export interface JournalEntry {
+  id: string;
+  /** Absent means a loose-leaf entry, not attached to a book. */
+  bookId?: string;
+  text: string;
+  /** YYYY-MM-DD. */
+  onDate?: string;
+  page?: number;
+  /** EPUB CFI anchor when written from the reader. */
+  cfi?: string;
+  percent?: number;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt?: number;
 }
 
 export interface JournalData {
@@ -67,6 +99,8 @@ export interface JournalData {
   books: Book[];
   quotes: Quote[];
   shelves: Shelf[];
+  /** Loose-leaf and book-attached journal writing (v3). */
+  entries: JournalEntry[];
 }
 
 export const STATUS_META: Record<

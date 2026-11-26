@@ -1,0 +1,19 @@
+name = "marginalia-api"
+main = "worker/src/index.ts"
+compatibility_date = "2026-01-15"
+
+# D1: metadata. The database already exists on the owner's account.
+[[d1_databases]]
+binding = "DB"
+database_name = "marginalia-v3"
+database_id = "a72e3d16-d133-492d-9145-120579b837f3"
+
+[vars]
+R2_BUCKET = "marginalia-books"
+
+# Secrets — never in this file. Set once per account:
+#   wrangler secret put S3_ACCESS_KEY_ID      # R2 S3 API token access key
+#   wrangler secret put S3_SECRET_ACCESS_KEY  # R2 S3 API token secret
+#   wrangler secret put R2_ACCOUNT_ID         # the account id (kept out of the repo)
+#
+# The S3 token needs Object Read + Write on marginalia-books only.
