@@ -140,6 +140,8 @@ for (const [name, file] of [
   ['reading plan queue, pace, forecast', 'smoke/plan-tests.cjs'],
   ['reader: opening, TOC, chapters, sanitising', 'smoke/reader-tests.cjs'],
   ['pagination and typography', 'smoke/reader-typography-tests.cjs'],
+  ['sync merge: edits, deletes, tombstones, conflicts', 'smoke/merge-tests.cjs'],
+  ['worker: keys, merge decisions, row shaping, schema', 'smoke/worker-tests.cjs'],
 ]) {
   check(name, () => {
     const out = run('node', [file]);

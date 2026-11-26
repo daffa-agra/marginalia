@@ -35,6 +35,22 @@ const PATHS = {
     </>
   ),
   plus: <path d="M8 3.25v9.5M3.25 8h9.5" />,
+  /* Two arrows chasing each other: a sync, not a refresh (which implies loss). */
+  sync: (
+    <>
+      <path d="M13 8a5 5 0 0 1-8.5 3.6" />
+      <path d="M3 8a5 5 0 0 1 8.5-3.6" />
+      <path d="M11.5 1.9v2.6H8.9" />
+      <path d="M4.5 14.1v-2.6h2.6" />
+    </>
+  ),
+  key: (
+    <>
+      <circle cx="5.25" cy="10.75" r="2.25" />
+      <path d="m7 9 6-6" />
+      <path d="m11.25 4.75 1.75 1.75" />
+    </>
+  ),
   close: <path d="m4 4 8 8M12 4l-8 8" />,
   chevronDown: <path d="m4.5 6.5 3.5 3.5 3.5-3.5" />,
   check: <path d="m3.25 8.5 3.25 3.25 6.25-7" />,

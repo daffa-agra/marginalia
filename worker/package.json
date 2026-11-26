@@ -1,0 +1,21 @@
+{
+    "name":  "marginalia-worker",
+    "private":  true,
+    "version":  "0.1.0",
+    "type":  "module",
+    "scripts":  {
+                    "typecheck":  "tsc --noEmit -p tsconfig.json",
+                    "test":  "node ../smoke/worker-tests.cjs",
+                    "dev":  "wrangler dev",
+                    "deploy":  "wrangler deploy",
+                    "db:apply":  "wrangler d1 execute marginalia-v3 --remote --file=src/schema.sql"
+                },
+    "dependencies":  {
+                         "aws4fetch":  "^1.0.20"
+                     },
+    "devDependencies":  {
+                            "@cloudflare/workers-types":  "^5.20261123.1",
+                            "typescript":  "~5.9.0",
+                            "wrangler":  "^4.0.0"
+                        }
+}

@@ -1577,6 +1577,176 @@ mark.reader-highlight:hover {
   }
 }
 
+/* ---------- Settings: where the writing lives ---------- */
+
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+}
+
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  border-top: 1px solid var(--border);
+  padding-top: var(--s-4);
+}
+
+.settings-group:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.settings-group h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.settings-subhead {
+  margin: var(--s-3) 0 0;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.settings-note {
+  margin: 0;
+  font-size: 0.86rem;
+  line-height: 1.6;
+  max-width: 60ch;
+}
+
+.settings-facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin: 0;
+}
+
+.settings-facts div {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  font-size: 0.84rem;
+}
+
+.settings-facts dt {
+  font-family: var(--font-ui);
+  color: var(--ink-3);
+  min-width: 12ch;
+}
+
+.settings-facts dd {
+  margin: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.settings-mono {
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 0.78rem !important;
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.settings-hint {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+}
+
+.danger-text {
+  color: var(--danger);
+}
+
+/* The key is displayed in a running monospace, spaced in fours so it can be
+   read aloud; the canonical value is one unbroken string. */
+.settings-key {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  padding: var(--s-3);
+}
+
+.settings-key code {
+  flex: 1;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 0.76rem;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+}
+
+.settings-key-fingerprint {
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: 2px 5px;
+}
+
+.settings-link {
+  display: flex;
+  gap: var(--s-2);
+}
+
+.settings-link-input {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 0.78rem;
+}
+
+.settings-link-forget {
+  align-self: flex-start;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--danger);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.settings-conflicts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.settings-conflicts li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  padding: var(--s-2) var(--s-3);
+  font-size: 0.84rem;
+}
+
+.settings-storage-bar {
+  max-width: 32ch;
+}
+
 /* ---------- Reading plan ---------- */
 .plan-next {
   background: var(--surface);

@@ -1,0 +1,39 @@
+# Marginalia API.
+#
+# Deploy with:  wrangler deploy
+#
+# Secrets are set once, never committed:
+#   wrangler secret put R2_ACCESS_KEY_ID
+#   wrangler secret put R2_SECRET_ACCESS_KEY
+#   wrangler secret put R2_ACCOUNT_ID
+#   wrangler secret put JOURNAL_PEPPER      (optional)
+
+name = "marginalia-api"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# The app is served from Pages; the API is a separate Worker on a subdomain.
+routes = [
+  { pattern = "api.books.daffagra.my.id", custom_domain = true }
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "marginalia-v3"
+database_id = "a72e3d16-d133-492d-9145-120579b837f3"
+
+[[r2_buckets]]
+binding = "BOOKS"
+bucket_name = "marginalia-books"
+
+[vars]
+R2_BUCKET = "marginalia-books"
+ALLOWED_ORIGINS = "https://books.daffagra.my.id,http://127.0.0.1:4173,http://localhost:4173,http://localhost:5173,http://127.0.0.1:5173"
+
+[observability]
+enabled = true
+
+# Tombstone collection. Keeps D1 from growing without bound; the client also
+# prunes its own copies on the same schedule.
+[triggers]
+crons = ["17 3 * * *"]

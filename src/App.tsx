@@ -9,6 +9,7 @@ import { ReaderView } from './views/ReaderView';
 import { ImportModal } from './components/ImportModal';
 import { DataModal } from './components/DataModal';
 import { UploadBookModal } from './components/UploadBookModal';
+import { SettingsModal } from './components/SettingsModal';
 import { BrandMark, Icon } from './components/icons';
 import { ToastRegion, useToasts } from './lib/toasts';
 import { listPendingDeletes, removePendingDelete } from './lib/pendingDeletes';
@@ -38,6 +39,7 @@ export default function App() {
   const [readingBookId, setReadingBookId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [dataOpen, setDataOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [globalDrag, setGlobalDrag] = useState(false);
@@ -205,6 +207,17 @@ export default function App() {
                   className="more-item"
                   onClick={() => {
                     setMoreOpen(false);
+                    setSettingsOpen(true);
+                  }}
+                >
+                  <Icon name="key" /> Settings and sync
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="more-item"
+                  onClick={() => {
+                    setMoreOpen(false);
                     setDataOpen(true);
                   }}
                 >
@@ -312,6 +325,14 @@ export default function App() {
           onClose={() => setDataOpen(false)}
           notify={notify}
           returnFocusTo=".more-trigger"
+        />
+      )}
+      {settingsOpen && (
+        <SettingsModal
+          data={store.data}
+          onClose={() => setSettingsOpen(false)}
+          onSynced={store.replaceAll}
+          notify={notify}
         />
       )}
       {adding && (
