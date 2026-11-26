@@ -1,5 +1,9 @@
 export type ReadStatus = 'want-to-read' | 'reading' | 'finished' | 'abandoned';
 
+import type { TextAnchor } from './lib/anchors';
+
+export type { TextAnchor };
+
 /** Where the reader left off in a book. Chapter index plus a fraction within it. */
 export interface ReadingPosition {
   chapter: number;
@@ -72,8 +76,21 @@ export interface Quote {
   note?: string;
   /** Play Books usually reports a % position. */
   position?: string;
+  /**
+   * Where the passage is in the book, for a quote taken from the reader.
+   *
+   * Deliberately not a page number: this has to survive a font change, a window
+   * resize and a reload, none of which a page survives. See `lib/anchors.ts`.
+   */
+  anchor?: TextAnchor;
+  /** Progress through the book when the quote was taken, 0–1. */
+  percent?: number;
   /** Unix ms. */
   createdAt: number;
+  /** Unix ms. Bumped on every edit, so a sync can order writes. */
+  updatedAt: number;
+  /** Unix ms. A tombstone: the record was deleted and the delete must sync. */
+  deletedAt?: number;
 }
 
 export interface JournalData {

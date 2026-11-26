@@ -1410,8 +1410,174 @@ a {
   }
 }
 
-/* ---------- Reading plan ---------- */
+/* ---------- Annotation: selection, highlights, margin notes ---------- */
 
+/*
+ * Highlights are painted inside the book document, so their colours cannot use
+ * the app's CSS variables — the frame is a separate document. The values are
+ * set from the reader theme when the chapter is rendered; these rules only
+ * cover behaviour.
+ */
+mark.reader-highlight {
+  background: color-mix(in srgb, currentColor 22%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0.06em 0;
+  cursor: pointer;
+}
+
+mark.reader-highlight[data-tone='note'] {
+  /* A note sits slightly heavier than a bare quote: it is the thing the app is
+     named for, and it should be findable while skimming. */
+  background: color-mix(in srgb, currentColor 30%, transparent);
+  border-bottom: 1px solid currentColor;
+}
+
+mark.reader-highlight:hover {
+  background: color-mix(in srgb, currentColor 38%, transparent);
+}
+
+.selection-toolbar {
+  position: absolute;
+  z-index: 9;
+  display: flex;
+  gap: 1px;
+  transform: translate(-50%, calc(-100% - 10px));
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  box-shadow: var(--shadow-pop);
+  padding: 2px;
+  animation: pop-in var(--t-fast) var(--ease);
+}
+
+.selection-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-xs);
+  color: var(--ink-2);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  min-height: 30px;
+  padding: 0 var(--s-2);
+}
+
+.selection-toolbar button:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+/* The note composer: a column in the margin, not a modal over the text. */
+.margin-composer {
+  position: absolute;
+  top: var(--s-4);
+  right: var(--s-4);
+  bottom: var(--s-4);
+  z-index: 10;
+  width: min(90vw, 340px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-pop);
+  padding: var(--s-4);
+  overflow-y: auto;
+  animation: pop-in var(--t-mid) var(--ease);
+}
+
+.margin-composer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+
+.margin-composer-title {
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  color: var(--ink-3);
+  text-transform: uppercase;
+}
+
+.margin-composer-quote {
+  margin: 0;
+  padding-left: var(--s-3);
+  border-left: 1px solid var(--border-strong);
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--ink-2);
+  font-style: italic;
+  /* A long passage must not push the textarea off the sheet. */
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+.margin-composer-field {
+  display: flex;
+  flex-direction: column;
+}
+
+.margin-composer-field textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 96px;
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.margin-composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.margin-composer-actions .danger {
+  color: var(--danger, #9b2c2c);
+  margin-right: auto;
+}
+
+.margin-composer-hint {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+}
+
+.margin-composer-hint kbd {
+  font-family: var(--font-ui);
+  font-size: 0.68rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 3px;
+  background: var(--surface-2);
+}
+
+@media (max-width: 720px) {
+  /* On a phone the margin is the bottom of the screen. */
+  .margin-composer {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    max-height: 72vh;
+    border-radius: var(--radius-m) var(--radius-m) 0 0;
+    border-left: 1px solid var(--border-strong);
+  }
+}
+
+/* ---------- Reading plan ---------- */
 .plan-next {
   background: var(--surface);
   border: 1px solid var(--border-strong);

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Book } from '../types';
+import type { Book, TextAnchor } from '../types';
 import type { JournalStore } from '../useJournal';
 import { Icon } from '../components/icons';
 import { ReaderSettingsPanel } from '../components/ReaderSettingsPanel';
+import { MarginComposer, SelectionToolbar } from '../components/MarginComposer';
 import { loadBookBytes } from '../lib/bookFiles';
 import { chapterHtml, closeBook, openBook, resolvePath } from '../lib/epubBook';
 import type { ParsedBook } from '../lib/epubBook';
@@ -18,12 +19,14 @@ import { buildReaderCss, resolveColumns } from '../lib/readerCss';
 import {
   pageForElement,
   pageForTextFraction,
+  pageToFraction,
   paginate,
   showPage,
   textFractionAtPage,
 } from '../lib/pagination';
 import type { PageGeometry } from '../lib/pagination';
 import { useReaderSettings } from '../lib/useReaderSettings';
+import { buildAnchor, paintHighlights } from '../lib/anchors';
 
 /** The centre band of a page toggles the chrome, as a fraction of the width. */
 const CENTRE_BAND = { start: 0.375, end: 0.625 };
@@ -73,6 +76,17 @@ export function ReaderView({
   const [chromeVisible, setChromeVisible] = useState(true);
   const [stageWidth, setStageWidth] = useState(0);
 
+  /** The passage the reader has selected, and where to float the toolbar. */
+  const [selection, setSelection] = useState<{
+    anchor: TextAnchor;
+    quote: string;
+    x: number;
+    y: number;
+    /** Set when the selection came from clicking an existing highlight. */
+    existingId?: string;
+  } | null>(null);
+  const [composerNote, setComposerNote] = useState<string | null>(null);
+
   const frameRef = useRef<HTMLIFrameElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const bufferRef = useRef<ArrayBuffer | null>(null);
@@ -94,9 +108,22 @@ export function ReaderView({
   const linkHandlerRef = useRef<(href: string) => void>(() => {});
   const gestureHandlerRef = useRef<(direction: 1 | -1 | 0, clientX: number) => void>(() => {});
   const turnPageRef = useRef<(direction: 1 | -1) => void>(() => {});
+  const selectionHandlerRef = useRef<() => void>(() => {});
+  const highlightClickRef = useRef<(id: string) => void>(() => {});
+  const paintRef = useRef<() => void>(() => {});
+  /** Whether the composer is open, without making the frame handler depend on it. */
+  const composerNoteRef = useRef<string | null>(null);
+  /** The live selection inside the book, kept across the toolbar's own clicks. */
+  const pendingRange = useRef<Range | null>(null);
 
   const total = parsed?.chapters.length ?? 0;
   pageIndexRef.current = pageIndex;
+
+  /** Quotes taken from this book, which the reader paints over the text. */
+  const bookQuotes = useMemo(
+    () => store.data.quotes.filter((q) => q.bookId === book.id && !q.deletedAt && q.anchor),
+    [store.data.quotes, book.id],
+  );
 
   /* ── open the archive ── */
   useEffect(() => {
@@ -207,6 +234,9 @@ export function ReaderView({
     pageIndexRef.current = target;
     showPage(doc, target, next);
     setReady(true);
+    // Highlights are markup inside the flowing text, so a re-measure has to be
+    // followed by a repaint or they would sit on the wrong words.
+    paintRef.current();
 
     function resolveFraction(fraction: number): number {
       if (fraction <= 0) return 0;
@@ -297,8 +327,29 @@ export function ReaderView({
       if (elapsed < 900 && Math.abs(dx) > SWIPE_MIN_PX && Math.abs(dx) > Math.abs(dy) * 1.4) {
         gestureHandlerRef.current(dx < 0 ? 1 : -1, event.clientX);
         return;
-      }      if (Math.abs(dx) > TAP_SLOP_PX || Math.abs(dy) > TAP_SLOP_PX) return;
+      }
+      if (Math.abs(dx) > TAP_SLOP_PX || Math.abs(dy) > TAP_SLOP_PX) return;
       gestureHandlerRef.current(0, event.clientX);
+    });
+
+    // Selecting text raises the annotation toolbar. `selectionchange` is the
+    // only event that reliably fires for a drag-selection inside a frame.
+    let selectionTimer: number | undefined;
+    doc.addEventListener('selectionchange', () => {
+      if (selectionTimer) window.clearTimeout(selectionTimer);
+      // Wait for the pointer to settle, or the toolbar would jump mid-drag.
+      selectionTimer = window.setTimeout(() => selectionHandlerRef.current(), 140);
+    });
+
+    // Clicking an existing highlight re-opens its note.
+    doc.addEventListener('click', (event) => {
+      const mark = (event.target as Element | null)?.closest?.('mark.reader-highlight');
+      if (!mark) return;
+      const id = mark.getAttribute('data-highlight-id');
+      if (!id) return;
+      event.preventDefault();
+      event.stopPropagation();
+      highlightClickRef.current(id);
     });
 
     // The reader owns navigation; the frame itself must never navigate away.
@@ -327,13 +378,95 @@ export function ReaderView({
     });
   }, [chapterIndex, persistPosition]);
 
+  /**
+   * Paints this chapter's saved notes over the text.
+   *
+   * Runs after every pagination, because pagination re-lays out the DOM and a
+   * highlighter that survives a font change has to be repainted from its anchor
+   * rather than kept as markup.
+   */
+  const paintChapterHighlights = useCallback(() => {
+    const doc = frameRef.current?.contentDocument;
+    if (!doc) return;
+    const inChapter = bookQuotes
+      .map((q) => ({ quote: q, anchor: q.anchor! }))
+      .filter(({ anchor }) => anchor.chapter === chapterIndex);
+    try {
+      paintHighlights(
+        doc,
+        inChapter.map(({ quote, anchor }) => ({
+          id: quote.id,
+          anchor,
+          tone: quote.note ? 'note' : 'quote',
+        })),
+      );
+    } catch {
+      // Highlighting is decoration over the text. A passage that cannot be
+      // re-anchored must never take the reader down with it.
+    }
+  }, [bookQuotes, chapterIndex]);
+
+  /** Reads the current selection and offers the toolbar over it. */
+  const handleSelectionChange = useCallback(() => {
+    const frame = frameRef.current;
+    const doc = frame?.contentDocument;
+    const stage = stageRef.current;
+    if (!frame || !doc || !stage) return;
+    const sel = doc.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+      // A collapsed selection means the reader clicked away: dismiss the offer.
+      if (!composerNoteRef.current) setSelection(null);
+      return;
+    }
+    const text = sel.toString().trim();
+    if (!text) {
+      if (!composerNoteRef.current) setSelection(null);
+      return;
+    }
+    const range = sel.getRangeAt(0);
+    // Only selections inside the chapter's text can be anchored.
+    const content = doc.getElementById('book-content');
+    if (!content || !content.contains(range.startContainer) || !content.contains(range.endContainer)) {
+      return;
+    }
+    const anchor = buildAnchor(doc, chapterIndex, range);
+    if (!anchor) return;
+    // Toolbar position: above the selection, in app coordinates.
+    const rect = range.getBoundingClientRect();
+    const frameRect = frame.getBoundingClientRect();
+    const stageRect = stage.getBoundingClientRect();
+    const x = frameRect.left - stageRect.left + rect.left + rect.width / 2;
+    const y = frameRect.top - stageRect.top + rect.top;
+    pendingRange.current = range.cloneRange();
+    setSelection({ anchor, quote: text, x, y });
+  }, [chapterIndex]);
+
+  /** Re-opens the note behind an existing highlight. */
+  const handleHighlightClick = useCallback(
+    (id: string) => {
+      const quote = bookQuotes.find((q) => q.id === id);
+      if (!quote) return;
+      setSelection({
+        anchor: quote.anchor!,
+        quote: quote.text,
+        x: 0,
+        y: 0,
+        existingId: quote.id,
+      });
+      setComposerNote(quote.note ?? '');
+      setChromeVisible(false);
+    },
+    [bookQuotes],
+  );
+
   const onFrameLoad = useCallback(() => {
     // Give the frame a tick for fonts and images before measuring.
     window.setTimeout(() => {
       repaginate();
+      paintChapterHighlights();
       attachFrameHandlers();
     }, 60);
-  }, [repaginate, attachFrameHandlers]);
+  }, [repaginate, paintChapterHighlights, attachFrameHandlers]);
 
   /* ── stage size, for "auto" columns and for reflowing on resize ── */
   useEffect(() => {
@@ -542,9 +675,92 @@ export function ReaderView({
     keyHandlerRef.current = onKey;
     linkHandlerRef.current = followLink;
     turnPageRef.current = turnPage;
+    selectionHandlerRef.current = handleSelectionChange;
+    highlightClickRef.current = handleHighlightClick;
+    paintRef.current = paintChapterHighlights;
+    composerNoteRef.current = composerNote;
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [turnPage, onBack, tocOpen, settingsOpen, goToChapter, chapterIndex, followLink]);
+  }, [
+    turnPage,
+    onBack,
+    tocOpen,
+    settingsOpen,
+    goToChapter,
+    chapterIndex,
+    followLink,
+    handleSelectionChange,
+    handleHighlightClick,
+    paintChapterHighlights,
+    composerNote,
+  ]);
+
+  /* ── saving what the reader wrote ── */
+  /** Progress through the whole book at the current page, 0–1. */
+  const currentPercent = useCallback((): number | undefined => {
+    if (!total) return undefined;
+    const within = geometry ? pageToFraction(pageIndex, geometry.pageCount) : 0;
+    return Math.min(1, Math.max(0, (chapterIndex + within) / total));
+  }, [total, chapterIndex, geometry, pageIndex]);
+
+  const saveQuote = useCallback(() => {
+    if (!selection) return;
+    if (selection.existingId) {
+      setSelection(null);
+      return;
+    }
+    store.addQuotes(book.id, [
+      { text: selection.quote, anchor: selection.anchor, percent: currentPercent() },
+    ]);
+    setSelection(null);
+    // The highlight appears via the effect below, which runs with the record
+    // already in the store. Painting here as well would race it: this closure
+    // still sees the pre-save quote list, so it would clear the highlight the
+    // effect had just painted.
+  }, [selection, store, book.id, currentPercent]);
+
+  const saveNote = useCallback(
+    (note: string) => {
+      if (!selection) return;
+      if (selection.existingId) {
+        store.updateQuote(selection.existingId, { note: note || undefined });
+      } else {
+        store.addQuotes(book.id, [
+          {
+            text: selection.quote,
+            note: note || undefined,
+            anchor: selection.anchor,
+            percent: currentPercent(),
+          },
+        ]);
+      }
+      setSelection(null);
+      setComposerNote(null);
+    },
+    [selection, store, book.id, currentPercent],
+  );
+
+  const deleteNote = useCallback(() => {
+    if (!selection?.existingId) return;
+    store.deleteQuote(selection.existingId);
+    setSelection(null);
+    setComposerNote(null);
+  }, [selection, store]);
+
+  const copySelection = useCallback(async () => {
+    if (!selection) return;
+    try {
+      await navigator.clipboard.writeText(selection.quote);
+    } catch {
+      // Clipboard access can be refused; the selection is still on screen.
+    }
+    setSelection(null);
+  }, [selection]);
+
+  /* Keep the highlights in step with the stored quotes. */
+  useEffect(() => {
+    paintChapterHighlights();
+  }, [paintChapterHighlights]);
 
   /* ── progress ── */
   const percent = useMemo(() => {
@@ -674,6 +890,36 @@ export function ReaderView({
             onLoad={onFrameLoad}
           />
         )}
+        {/* The annotation toolbar, floated over the selection it acts on. */}
+        {selection && !composerNote && !selection.existingId && (
+          <SelectionToolbar
+            x={selection.x}
+            y={selection.y}
+            onNote={() => setComposerNote('')}
+            onQuote={saveQuote}
+            onCopy={copySelection}
+          />
+        )}
+
+        {/* The note being written or edited. A composer for an existing note is
+            opened by clicking its highlight, so it shows without a toolbar. */}
+        {(composerNote !== null || selection?.existingId) && selection && (
+          <MarginComposer
+            quote={selection.quote}
+            initialNote={
+              selection.existingId
+                ? (bookQuotes.find((q) => q.id === selection.existingId)?.note ?? '')
+                : composerNote ?? ''
+            }
+            onSave={saveNote}
+            onDelete={selection.existingId ? deleteNote : undefined}
+            onClose={() => {
+              setSelection(null);
+              setComposerNote(null);
+            }}
+          />
+        )}
+
         {opening && !loading && (
           <div className="reader-loading" role="status">
             <p className="muted">Setting the page…</p>

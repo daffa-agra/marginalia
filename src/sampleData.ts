@@ -155,6 +155,7 @@ export function sampleData() {
         note: q.note,
         position: q.position,
         createdAt: now,
+        updatedAt: now,
       });
     }
   }

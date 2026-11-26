@@ -246,7 +246,8 @@ export function useJournal() {
   );
 
   const addQuotes = useCallback(
-    (bookId: string, quotes: Array<Omit<Quote, 'id' | 'createdAt' | 'bookId'>>) => {
+    (bookId: string, quotes: Array<Omit<Quote, 'id' | 'createdAt' | 'updatedAt' | 'bookId'>>) => {
+      const now = Date.now();
       mutate((d) => ({
         ...d,
         quotes: [
@@ -255,7 +256,8 @@ export function useJournal() {
             ...q,
             bookId,
             id: makeId('q'),
-            createdAt: Date.now(),
+            createdAt: now,
+            updatedAt: now,
           })),
         ],
       }));
@@ -264,10 +266,16 @@ export function useJournal() {
   );
 
   const updateQuote = useCallback(
-    (id: string, patch: Partial<Pick<Quote, 'text' | 'note' | 'position' | 'bookId'>>) => {
+    (
+      id: string,
+      patch: Partial<Pick<Quote, 'text' | 'note' | 'position' | 'bookId' | 'anchor' | 'percent'>>,
+    ) => {
+      const now = Date.now();
       mutate((d) => ({
         ...d,
-        quotes: d.quotes.map((q) => (q.id === id ? { ...q, ...patch } : q)),
+        // `updatedAt` is what lets a sync decide which of two edits is newer,
+        // so it is bumped here rather than left to the caller.
+        quotes: d.quotes.map((q) => (q.id === id ? { ...q, ...patch, updatedAt: now } : q)),
       }));
     },
     [mutate],

@@ -208,6 +208,26 @@ img, svg, video {
 }
 td, th { border: 1px solid ${palette.border} !important; padding: 4px 8px !important; }
 figcaption { color: ${palette.muted} !important; font-size: 0.86em !important; }
+/* Marginalia. Painted by the reader from saved anchors; see lib/anchors.ts. */
+mark.reader-highlight {
+  background: ${theme === 'night' ? 'rgba(224, 138, 92, 0.26)' : 'rgba(139, 54, 22, 0.16)'};
+  color: inherit !important;
+  border-radius: 2px;
+  padding: 0.05em 0;
+  cursor: pointer;
+  /* A highlight must not change the line box, or painting one would repaginate
+     the chapter underneath the reader. */
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+mark.reader-highlight[data-tone='note'] {
+  background: ${theme === 'night' ? 'rgba(224, 138, 92, 0.36)' : 'rgba(139, 54, 22, 0.24)'};
+  border-bottom: 1px solid ${theme === 'night' ? '#e08a5c' : '#8b3616'};
+}
+mark.reader-highlight:hover {
+  background: ${theme === 'night' ? 'rgba(224, 138, 92, 0.46)' : 'rgba(139, 54, 22, 0.32)'};
+}
+::selection { background: ${theme === 'night' ? 'rgba(224, 138, 92, 0.45)' : 'rgba(139, 54, 22, 0.22)'}; }
 `;
 }
 

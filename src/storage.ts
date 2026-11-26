@@ -1,4 +1,4 @@
-import type { Book, JournalData, Quote, ReadStatus, Shelf } from './types';
+import type { Book, JournalData, Quote, ReadStatus, Shelf, TextAnchor } from './types';
 import { makeId } from './lib/utils';
 
 const STORAGE_KEY = 'marginalia.journal.v1';
@@ -245,6 +245,28 @@ function pickShelf(s: unknown): Shelf | null {
   };
 }
 
+/** Coerces an untrusted anchor, or drops it rather than trusting its shape. */
+function pickAnchor(value: unknown): TextAnchor | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  const chapter = num(raw.chapter);
+  const start = str(raw.start);
+  const end = str(raw.end);
+  const text = str(raw.text);
+  if (chapter === undefined || chapter < 0 || !start || !end || !text) return undefined;
+  // A path is "0.3.1@42"; anything else cannot be resolved, so it is not kept.
+  const valid = (path: string) => /^\d+(\.\d+)*@\d+$/.test(path);
+  if (!valid(start) || !valid(end)) return undefined;
+  return {
+    chapter: Math.floor(chapter),
+    start,
+    end,
+    text,
+    prefix: str(raw.prefix),
+    suffix: str(raw.suffix),
+  };
+}
+
 function pickQuote(q: unknown): Quote | null {
   if (!q || typeof q !== 'object') return null;
   const raw = q as Record<string, unknown>;
@@ -252,13 +274,21 @@ function pickQuote(q: unknown): Quote | null {
   const bookId = str(raw.bookId);
   const text = str(raw.text);
   if (!id || !bookId || !text) return null;
+  const createdAt = num(raw.createdAt) ?? Date.now();
+  const percent = num(raw.percent);
   return {
     id,
     bookId,
     text,
     note: str(raw.note),
     position: str(raw.position),
-    createdAt: num(raw.createdAt) ?? Date.now(),
+    anchor: pickAnchor(raw.anchor),
+    percent: typeof percent === 'number' && Number.isFinite(percent)
+      ? Math.max(0, Math.min(1, percent))
+      : undefined,
+    createdAt,
+    updatedAt: num(raw.updatedAt) ?? createdAt,
+    deletedAt: num(raw.deletedAt),
   };
 }
 
