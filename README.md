@@ -4,6 +4,7 @@ A personal book journal and EPUB reader — your shelves, notes in the margins, 
 
 ## What it does today
 
+- **Read EPUBs** — open a DRM-free EPUB and read it in the app: chapters in spine order, a table of contents from the book's own nav, embedded images and the book's stylesheet preserved, adjustable text size, and a reading position that survives a reload and a font-size change. Book content renders in a sandboxed frame with scripts disabled.
 - **Reading plan** — queue the books you mean to read next, in order. Undated by design: it says which book is next, not when to read it. The page reports your measured pace and when the queue would empty at that pace.
 - **Shelves** — group books the way you think of them (*Bedside*, *Research*, *Re-read someday*). **One book, one shelf**, like folders: shelf counts always add up to your library. Unshelved is always there, and deleting a shelf moves its books rather than deleting them.
 - **EPUB upload** — drop a DRM-free EPUB and the title, author, language, publisher, cover and chapter count are read from the book itself. Or add a book by hand as metadata only.
@@ -16,7 +17,9 @@ A personal book journal and EPUB reader — your shelves, notes in the margins, 
 
 ## What it does not do yet
 
-The **reading surface itself** is not built. Uploading an EPUB stores the file and reads its metadata, but there is no page view, no pagination and no in-book navigation yet — that is Phase 1 of the plan below. Books are therefore not readable in the app today.
+- **No sync.** Everything is local to one browser. The planned Cloudflare backend (D1 + R2) is designed but not built.
+- **No annotations yet.** You can read a book, but you cannot yet select a sentence and keep it — the margin-notation work is the next phase.
+- EPUB only. No PDF, MOBI or AZW3, and no DRM-protected files.
 
 ## Running it
 
@@ -64,6 +67,7 @@ npx tsc -p tsconfig.smoke.json
 node smoke/smoke.cjs                  # render, parser, storage, exporters
 node smoke/epub-tests.cjs             # ZIP reader, EPUB metadata, shelves
 node smoke/plan-tests.cjs             # reading plan queue, pace, forecast
+node smoke/reader-tests.cjs           # EPUB opening, TOC, chapters, sanitising
 ```
 
 The browser suites need the built app served on `http://127.0.0.1:4173`:
@@ -73,6 +77,7 @@ node smoke/serve-dist.cjs             # serves dist/
 node smoke/verify-trust.cjs           # delete/undo, focus, durability
 node smoke/shelf-upload-tests.cjs     # shelves and upload in a real browser
 node smoke/plan-ui-tests.cjs          # the reading plan in a real browser
+node smoke/reader-ui-tests.cjs         # reading an EPUB in a real browser
 node smoke/byte-lifecycle.cjs         # book bytes survive undo, clear on expiry
 node smoke/dev-server-check.cjs       # the dev server serves the app
 ```
@@ -82,7 +87,7 @@ node smoke/dev-server-check.cjs       # the dev server serves the app
 The reader is planned in phases. The architecture and typography specifications are kept as local design notes rather than committed documents.
 
 - **Phase 0** — IndexedDB storage and migration
-- **Phase 1** — the reader: pagination, TOC, typography, position restore
+- **Phase 1** — the reader: chapters, TOC, typography, position restore *(built; pagination is scrolling, not page-turning)*
 - **Phase 2** — selection → margin notes, journaling
 - **Phase 3** — Cloudflare backend: EPUB upload to R2, shelves end to end
 - **Phase 4** — metadata sync across devices
@@ -114,7 +119,7 @@ src/
     playbooks.ts        Play Books export parser
     exporters.ts        JSON / CSV / Markdown export
   components/           Book cards, modals, shelves, authored icon set
-  views/                Library, Reading plan, Quotes, Reading life
+  views/                Library, Reading plan, Reader, Quotes, Reading life
 smoke/                  Test suites, QA gates, fixtures
 ```
 

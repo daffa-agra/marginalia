@@ -5,6 +5,7 @@ import { StatsView } from './views/StatsView';
 import { PlanView } from './views/PlanView';
 import { QuotesView } from './views/QuotesView';
 import { BookDetailView } from './components/BookDetail';
+import { ReaderView } from './views/ReaderView';
 import { ImportModal } from './components/ImportModal';
 import { DataModal } from './components/DataModal';
 import { UploadBookModal } from './components/UploadBookModal';
@@ -34,6 +35,7 @@ export default function App() {
   const { toasts, notify, dismiss } = useToasts();
   const [view, setView] = useState<View>('library');
   const [openBookId, setOpenBookId] = useState<string | null>(null);
+  const [readingBookId, setReadingBookId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [dataOpen, setDataOpen] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -42,18 +44,28 @@ export default function App() {
 
   const openBook = useCallback((id: string) => {
     setOpenBookId(id);
+    setReadingBookId(null);
     setMoreOpen(false);
     window.scrollTo({ top: 0 });
   }, []);
 
+  /** Enter the reading surface. Needs a file, which the book page guarantees. */
+  const readBook = useCallback((id: string) => {
+    setReadingBookId(id);
+    setOpenBookId(null);
+    setMoreOpen(false);
+  }, []);
+
   const goLibrary = useCallback(() => {
     setOpenBookId(null);
+    setReadingBookId(null);
     setView('library');
     setMoreOpen(false);
   }, []);
 
   const switchView = useCallback((next: View) => {
     setOpenBookId(null);
+    setReadingBookId(null);
     setView(next);
     setMoreOpen(false);
   }, []);
@@ -229,8 +241,23 @@ export default function App() {
       )}
 
       <main id="main" className="app-main" tabIndex={-1}>
-        {openBookId ? (
-          <BookDetailView bookId={openBookId} store={store} onBack={goLibrary} notify={notify} />
+        {readingBookId ? (
+          <ReaderView
+            book={store.data.books.find((b) => b.id === readingBookId)!}
+            store={store}
+            onBack={() => {
+              setOpenBookId(readingBookId);
+              setReadingBookId(null);
+            }}
+          />
+        ) : openBookId ? (
+          <BookDetailView
+            bookId={openBookId}
+            store={store}
+            onBack={goLibrary}
+            onRead={readBook}
+            notify={notify}
+          />
         ) : view === 'library' ? (
           <LibraryView store={store} onOpenBook={openBook} notify={notify} />
         ) : view === 'stats' ? (
@@ -309,3 +336,4 @@ function SavedLine({ at }: { at: number }) {
   const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   return <span className="saved-line">Last saved {time}</span>;
 }
+

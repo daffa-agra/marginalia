@@ -138,6 +138,7 @@ for (const [name, file] of [
   ['render, parser, storage, exporters', 'smoke/smoke.cjs'],
   ['ZIP, EPUB metadata, shelves', 'smoke/epub-tests.cjs'],
   ['reading plan queue, pace, forecast', 'smoke/plan-tests.cjs'],
+  ['reader: opening, TOC, chapters, sanitising', 'smoke/reader-tests.cjs'],
 ]) {
   check(name, () => {
     const out = run('node', [file]);
@@ -227,6 +228,20 @@ check('the forecast refuses to guess without history', () => {
   runScript(script);
   return 'declines to guess';
 });
+check('reading position survives a storage round trip', () => {
+  const script = `
+    const { sanitizeData } = require('./dist-smoke/storage.js');
+    const pos = { chapter: 3, fraction: 0.5, updatedAt: 123 };
+    const out = sanitizeData({ books: [{ id: 'b', title: 'T', position: pos }], quotes: [], shelves: [] });
+    if (!out.books[0].position) throw new Error('position dropped by sanitize');
+    if (out.books[0].position.chapter !== 3) throw new Error('chapter lost');
+    const bad = sanitizeData({ books: [{ id: 'b', title: 'T', position: { chapter: 'x' } }], quotes: [], shelves: [] });
+    if (bad.books[0].position !== undefined) throw new Error('malformed position kept');
+    console.log('ok');
+  `;
+  runScript(script);
+  return 'position persisted, malformed dropped';
+});
 
 /* ────────────────────────────────────────────────────────────────────
    G5 · Hostile book content
@@ -261,7 +276,38 @@ check('book files are size-capped before parsing', () => {
   const text = read('src/lib/epub.ts');
   if (!/100 \* 1024 \* 1024/.test(text)) throw new Error('no size cap in looksLikeEpub');
   if (!/MAX_COVER_BYTES/.test(text)) throw new Error('no cover size cap');
-  return '100 MB book cap, 4 MB cover cap';
+  const reader = read('src/lib/epubBook.ts');
+  if (!/MAX_RESOURCE_BYTES/.test(reader)) throw new Error('no per-resource size cap');
+  if (!/MAX_CHAPTER_BYTES/.test(reader)) throw new Error('no chapter size cap');
+  return '100 MB book, 4 MB cover, 32 MB resource, 8 MB chapter';
+});
+check('reader renders book content in a sandboxed frame without scripts', () => {
+  const reader = read('src/views/ReaderView.tsx');
+  if (!/sandbox="allow-same-origin"/.test(reader)) throw new Error('iframe is not sandboxed');
+  if (/allow-scripts/.test(reader)) throw new Error('iframe allows scripts');
+  return 'sandboxed, scripts disabled';
+});
+check('reader strips active content from chapters', () => {
+  const text = read('src/lib/epubBook.ts');
+  // These are literal source patterns, not regexes: check them as strings.
+  const required = [
+    ['<script', 'script tags removed'],
+    ['\\son[a-z]+', 'event handler removal'],
+    ['javascript:', 'javascript URL neutralisation'],
+  ];
+  for (const [needle, label] of required) {
+    if (!text.includes(needle)) throw new Error(`missing ${label} (${needle})`);
+  }
+  return 'scripts, handlers and javascript: URLs removed';
+});
+check('reading position is chapter plus fraction, not a page number', () => {
+  const pos = read('src/lib/readingPosition.ts');
+  const types = read('src/types.ts');
+  const combined = pos + types;
+  if (!/chapter:\s*number/.test(combined) || !/fraction:\s*number/.test(combined)) {
+    throw new Error('position is not (chapter, fraction)');
+  }
+  return 'survives reflow by design';
 });
 
 /* ────────────────────────────────────────────────────────────────────
@@ -352,9 +398,16 @@ check('no inline hex colours in TSX', () => {
   for (const file of SRC) {
     if (file.endsWith('.ts')) continue;
     const text = read(file);
-    const matches = text.match(/#[0-9a-fA-F]{6}\b/g) || [];
-    // Book spine swatches are data, not styling; they live in one constant list.
-    const allowed = /BookFormModal|ImportModal|sampleData/.test(file);
+    // A hex value is only a problem when it styles something. Values passed as
+    // fallbacks to getPropertyValue() are token lookups, which is exactly the
+    // pattern we want, so strip those before scanning.
+    const withoutTokenFallbacks = text.replace(
+      /get\('--[\w-]+',\s*'#[0-9a-fA-F]{3,8}'\)/g,
+      '',
+    );
+    const matches = withoutTokenFallbacks.match(/#[0-9a-fA-F]{6}\b/g) || [];
+    // Book spine swatches and sample data are content, not styling.
+    const allowed = /BookFormModal|ImportModal|sampleData|lib\/colors/.test(file);
     if (matches.length && !allowed) offenders.push(`${file}: ${[...new Set(matches)].join(' ')}`);
   }
   if (offenders.length) throw new Error(offenders.join(', '));

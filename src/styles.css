@@ -955,6 +955,260 @@ a {
   overflow-wrap: anywhere;
 }
 
+/* ---------- Reader ---------- */
+
+.reader {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  z-index: 45;
+}
+
+.reader-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  transition: transform var(--t-mid) var(--ease);
+}
+
+.reader-bar:not(.visible) {
+  transform: translateY(-100%);
+  position: absolute;
+  width: 100%;
+}
+
+.reader-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-s);
+  color: var(--ink-2);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 0.82rem;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0 var(--s-2);
+}
+
+.reader-icon-btn:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.reader-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.reader-book-title {
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.95rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reader-chapter {
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  color: var(--ink-3);
+}
+
+.reader-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.reader-stage {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  background: var(--surface);
+}
+
+.reader-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: var(--surface);
+}
+
+.reader-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.reader-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-4);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.reader-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-s);
+  color: var(--ink-2);
+  cursor: pointer;
+  min-width: 34px;
+  min-height: 32px;
+}
+
+.reader-nav-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--ink);
+}
+
+.reader-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.reader-progress {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.reader-progress .progress-track {
+  flex: 1;
+}
+
+.reader-progress-label {
+  font-family: var(--font-ui);
+  font-size: 0.76rem;
+  color: var(--ink-2);
+  min-width: 3ch;
+  text-align: right;
+}
+
+.reader-chrome-toggle {
+  display: none;
+}
+
+/* Table of contents drawer */
+.reader-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgb(20 16 11 / 0.35);
+  z-index: 1;
+}
+
+.reader-toc {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(84vw, 340px);
+  background: var(--surface);
+  border-right: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-pop);
+  z-index: 2;
+  overflow-y: auto;
+  padding: var(--s-4);
+  animation: rise-in var(--t-mid) var(--ease);
+}
+
+.reader-toc h2 {
+  font-size: 0.78rem;
+  font-family: var(--font-ui);
+  letter-spacing: 0.02em;
+  color: var(--ink-3);
+  margin-bottom: var(--s-3);
+}
+
+.reader-toc ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.reader-toc-link {
+  width: 100%;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-s);
+  color: var(--ink-2);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 0.86rem;
+  padding: 8px var(--s-2);
+  text-align: left;
+  line-height: 1.35;
+}
+
+.reader-toc-link:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.reader-toc-link.active {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.reader-toc-link:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.reader-back {
+  margin: var(--s-4);
+}
+
+@media (max-width: 720px) {
+  .reader-bar {
+    padding: var(--s-2) var(--s-3);
+  }
+
+  .reader-book-title {
+    font-size: 0.86rem;
+  }
+
+  .reader-foot {
+    padding: var(--s-2) var(--s-3);
+    gap: var(--s-2);
+  }
+
+  .reader-chrome-toggle {
+    display: inline-flex;
+  }
+
+  .reader-toc {
+    width: 88vw;
+  }
+}
+
 /* ---------- Reading plan ---------- */
 
 .plan-next {

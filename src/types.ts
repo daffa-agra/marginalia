@@ -1,5 +1,12 @@
 export type ReadStatus = 'want-to-read' | 'reading' | 'finished' | 'abandoned';
 
+/** Where the reader left off in a book. Chapter index plus a fraction within it. */
+export interface ReadingPosition {
+  chapter: number;
+  fraction: number;
+  updatedAt: number;
+}
+
 /**
  * A shelf is a grouping you create — a drawer, not a tag.
  * A book belongs to at most one shelf, so shelves partition the library.
@@ -50,6 +57,8 @@ export interface Book {
    * queued. A queue book is one you intend to read next, in this order.
    */
   queuePosition?: number;
+  /** Where the reader left off. Survives font changes and re-renders. */
+  position?: ReadingPosition;
   /** Present once an EPUB has been attached to this book. */
   file?: EpubFile;
   /** Unix ms when the book was added to the journal. */

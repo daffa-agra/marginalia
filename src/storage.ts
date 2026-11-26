@@ -202,8 +202,23 @@ function pickBook(b: unknown): Book | null {
     color: str(raw.color) ?? '#b4552d',
     shelfId: str(raw.shelfId),
     queuePosition: num(raw.queuePosition) != null ? Math.max(0, num(raw.queuePosition)!) : undefined,
+    position: pickPosition(raw.position),
     file: pickEpubFile(raw.file),
     createdAt: num(raw.createdAt) ?? Date.now(),
+  };
+}
+
+/** Restores a stored reading position, dropping anything malformed. */
+function pickPosition(value: unknown): Book['position'] {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  const chapter = num(raw.chapter);
+  const fraction = num(raw.fraction);
+  if (chapter == null || fraction == null) return undefined;
+  return {
+    chapter: Math.max(0, Math.floor(chapter)),
+    fraction: Math.max(0, Math.min(1, fraction)),
+    updatedAt: num(raw.updatedAt) ?? Date.now(),
   };
 }
 
