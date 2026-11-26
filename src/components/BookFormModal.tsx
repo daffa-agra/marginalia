@@ -72,7 +72,7 @@ export function formValuesFromBook(book: Book): BookFormValues {
   };
 }
 
-function valuesToPatch(values: BookFormValues): Omit<Book, 'id' | 'createdAt'> {
+function valuesToPatch(values: BookFormValues): Omit<Book, 'id' | 'createdAt' | 'updatedAt'> {
   const totalPages = parseNonNegativeInt(values.totalPages);
   const currentPage = parseNonNegativeInt(values.currentPage) ?? 0;
   return {

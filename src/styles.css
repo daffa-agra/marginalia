@@ -2699,3 +2699,10 @@ a {
     scroll-behavior: auto !important;
   }
 }
+
+.storage-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.85rem;
+}

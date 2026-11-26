@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { JournalStore } from '../useJournal';
 import type { useToasts } from '../lib/toasts';
 import { Modal } from './Modal';
@@ -49,9 +49,14 @@ export function DataModal({
   return (
     <Modal title="Your data" onClose={onClose} returnFocusTo={returnFocusTo}>
       <p className="muted">
-        Everything lives in this browser's local storage. There is no server — export regularly to keep
-        a backup.
+        Your writing is kept in this browser's IndexedDB — nothing leaves the device. Export
+        regularly to keep a backup.
       </p>
+
+      <div className="data-section">
+        <h3>Storage</h3>
+        <StorageRow />
+      </div>
 
       <div className="data-section">
         <h3>Export</h3>
@@ -119,5 +124,53 @@ export function DataModal({
         )}
       </div>
     </Modal>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function StorageRow() {
+  const [quota, setQuota] = useState<{ usage: number; quota: number } | null>(null);
+  const [persisted, setPersisted] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const storage = navigator.storage;
+    if (!storage?.estimate) return;
+    storage
+      .estimate()
+      .then((estimate) => {
+        if (cancelled) return;
+        setQuota({ usage: estimate.usage ?? 0, quota: estimate.quota ?? 0 });
+      })
+      .catch(() => {});
+    if (storage.persisted) {
+      storage
+        .persisted()
+        .then((value) => {
+          if (!cancelled) setPersisted(value);
+        })
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!quota || quota.quota === 0) return null;
+  return (
+    <div className="storage-row">
+      <span className="numeric">
+        {formatBytes(quota.usage)} used of {formatBytes(quota.quota)}
+      </span>
+      <span className="muted">
+        {persisted === false
+          ? 'Books may be cleared by the browser when space runs short — exports stay safe.'
+          : 'Durable storage granted; books survive space pressure.'}
+      </span>
+    </div>
   );
 }
