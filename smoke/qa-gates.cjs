@@ -341,6 +341,34 @@ check('a reflow re-anchors to the text, not to the page index', () => {
   }
   return 'fraction → text anchor → page';
 });
+check('a marginal note is anchored to text, never to a page number', () => {
+  const anchors = read('src/lib/anchors.ts');
+  const types = read('src/types.ts');
+  if (!/interface TextAnchor/.test(anchors)) throw new Error('no anchor type');
+  if (!/chapter:\s*number/.test(anchors)) throw new Error('anchor carries no chapter');
+  // The path format is what storage validates, so both sides must agree on it.
+  if (!/encodePosition/.test(anchors)) throw new Error('no position encoding');
+  const storage = read('src/storage.ts');
+  if (!/\\d\+\(\\.\\d\+\)\*@\\d\+/.test(storage)) {
+    throw new Error('storage does not validate the anchor path format');
+  }
+  // A quote must carry the anchor, and must not be positioned by page.
+  if (!/anchor\?:\s*TextAnchor/.test(types)) throw new Error('Quote has no anchor field');
+  return 'chapter + text path; page numbers not used';
+});
+check('a highlight cannot crash the reader', () => {
+  const anchors = read('src/lib/anchors.ts');
+  const reader = read('src/views/ReaderView.tsx');
+  // Painting wraps text nodes, which shortens them; a stale offset throws
+  // IndexSizeError and, unguarded, unmounts the whole app. This happened.
+  if (!/Math\.min\(Math\.max\(0, start\), length\)/.test(anchors)) {
+    throw new Error('segment offsets are not clamped to the node length');
+  }
+  if (!/catch\s*\{\s*\/\/ Highlighting is decoration/.test(reader)) {
+    throw new Error('the paint call is not guarded at the call site');
+  }
+  return 'offsets clamped; paint failure cannot unmount the reader';
+});
 
 /* ────────────────────────────────────────────────────────────────────
    G6 · Durability and safety
