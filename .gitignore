@@ -2,6 +2,9 @@ node_modules
 dist
 dist-ssr
 dist-smoke
+dist-backup
+.review
+*.tmp
 *.local
 .DS_Store
 

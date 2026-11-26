@@ -7,5 +7,10 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    watch: {
+      // Tooling/temp dirs (review agents, backups) drop locked .tmp files
+      // that crash chokidar with EBUSY — none of these affect the app.
+      ignored: ['**/.review/**', '**/dist-backup/**', '**/dist/**', '**/smoke/**', '**/*.tmp'],
+    },
   },
 });
