@@ -98,26 +98,36 @@ function check(name, ok, detail) {
     .catch(() => null);
   check('embedded image loads from a blob URL', !!imgOk && /^blob:/.test(imgOk.src ?? '') && imgOk.w > 0, JSON.stringify(imgOk));
 
-  /* --- font size control --- */
-  const beforeSize = await page.evaluate(() => document.querySelector('.reader-frame')?.getAttribute('title'));
-  await page.getByRole('button', { name: 'Increase text size' }).click();
-  await page.waitForTimeout(900);
-  await page.getByRole('button', { name: 'Increase text size' }).click();
-  await page.waitForTimeout(900);
+  /* --- font size control (lives in the settings panel) --- */
+  await page.getByRole('button', { name: 'Reading settings' }).click();
+  await page.waitForTimeout(600);
+  await page.locator('.reader-settings input[aria-label="Font size"]').evaluate((el) => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(el, '24');
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.waitForTimeout(1600);
   const fs = await page.frameLocator('.reader-frame').locator('body').evaluate((el) => window.getComputedStyle(el).fontSize).catch(() => null);
-  check('text size control changes the page', fs !== null && parseFloat(fs) > 18, String(fs));
-
+  check('text size control changes the page', fs !== null && parseFloat(fs) === 24, String(fs));
+  await page.getByRole('button', { name: 'Close settings' }).click();
+  await page.waitForTimeout(500);
   /* --- next chapter button --- */
-  await page.getByRole('button', { name: 'Next chapter' }).click();
-  await page.waitForTimeout(1400);
-  const ch4 = await page.evaluate(() => document.querySelector('.reader-chapter')?.textContent);
-  check('next-chapter button advances', /4 of 6/.test(ch4 ?? ''), String(ch4));
+  /* --- next page advances within the chapter --- */
+  const beforePage = await page.evaluate(() => document.querySelector('.reader-chapter')?.textContent ?? '');
+  await page.getByRole('button', { name: 'Next page' }).click();
+  await page.waitForTimeout(1200);
+  const afterPage = await page.evaluate(() => document.querySelector('.reader-chapter')?.textContent ?? '');
+  check('next-page button advances a page', beforePage !== afterPage, `${beforePage} → ${afterPage}`);
 
   /* --- position persists across reload --- */
   const storedPos = await page.evaluate(() =>
     JSON.parse(localStorage.getItem('marginalia.journal.v1')).books[0].position,
   );
-  check('position is stored on the book', !!storedPos && storedPos.chapter === 3, JSON.stringify(storedPos));
+  check(
+    'position is stored on the book',
+    !!storedPos && typeof storedPos.chapter === 'number' && typeof storedPos.fraction === 'number',
+    JSON.stringify(storedPos),
+  );
 
   await page.reload({ waitUntil: 'networkidle' });
   await page.waitForTimeout(800);
@@ -131,7 +141,11 @@ function check(name, ok, detail) {
   await page.getByRole('button', { name: /Continue reading/ }).first().click();
   await page.waitForTimeout(2200);
   const resumed = await page.evaluate(() => document.querySelector('.reader-chapter')?.textContent);
-  check('reader resumes at the stored chapter', /4 of 6/.test(resumed ?? ''), String(resumed));
+  check(
+    'reader resumes at the stored chapter',
+    /^3 of 6/.test(resumed ?? ''),
+    String(resumed),
+  );
 
   /* --- escape leaves the reader --- */
   await page.keyboard.press('Escape');

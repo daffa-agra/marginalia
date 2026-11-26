@@ -2,18 +2,29 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Book } from '../types';
 import type { JournalStore } from '../useJournal';
 import { Icon } from '../components/icons';
+import { ReaderSettingsPanel } from '../components/ReaderSettingsPanel';
 import { loadBookBytes } from '../lib/bookFiles';
 import { chapterHtml, closeBook, openBook } from '../lib/epubBook';
 import type { ParsedBook } from '../lib/epubBook';
-import { bookProgress, chapterLabel, clampFraction, normalisePosition, progressPatch } from '../lib/readingPosition';
+import {
+  bookProgress,
+  chapterLabel,
+  clampFraction,
+  normalisePosition,
+  progressPatch,
+} from '../lib/readingPosition';
 import type { ReadingPosition as Position } from '../lib/readingPosition';
+import { buildReaderCss, resolveColumns } from '../lib/readerCss';
+import { fractionToPage, pageToFraction, paginate, showPage } from '../lib/pagination';
+import type { PaginationResult } from '../lib/pagination';
+import { useReaderSettings } from '../lib/useReaderSettings';
 
 /**
  * The reading surface.
  *
- * Chapters render in a sandboxed iframe with scripts disabled, so a hostile
- * EPUB cannot reach the app. Position is stored as (chapter, fraction) and
- * restored after a reflow, because page numbers do not survive a font change.
+ * A chapter renders as one tall document in a sandboxed frame; the pagination
+ * module carves it into pages that fit. Position is stored as (chapter,
+ * fraction-of-pages), so it survives a reflow, a font change and a reload.
  */
 export function ReaderView({
   book,
@@ -24,22 +35,27 @@ export function ReaderView({
   store: JournalStore;
   onBack: () => void;
 }) {
+  const settingsStore = useReaderSettings(book.id);
+  const { typography, settings } = settingsStore;
+
   const [parsed, setParsed] = useState<ParsedBook | null>(null);
   const [chapterIndex, setChapterIndex] = useState(0);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [pages, setPages] = useState<PaginationResult | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [tocOpen, setTocOpen] = useState(false);
-  const [chromeVisible, setChromeVisible] = useState(true);
-  const [fontSize, setFontSize] = useState(18);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [ready, setReady] = useState(false);
 
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const bufferRef = useRef<ArrayBuffer | null>(null);
   const pendingFraction = useRef(0);
 
-  const position: Position | null = book.position ?? null;
   const total = parsed?.chapters.length ?? 0;
 
-  /* ── load the archive once ── */
+  /* ── open the archive ── */
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -57,10 +73,10 @@ export function ReaderView({
         const buffer = await blob.arrayBuffer();
         if (cancelled) return;
         bufferRef.current = buffer;
-        const bookData = await openBook(buffer);
+        const data = await openBook(buffer);
         if (cancelled) return;
-        setParsed(bookData);
-        const start = normalisePosition(book.position, bookData.chapters.length);
+        setParsed(data);
+        const start = normalisePosition(book.position, data.chapters.length);
         setChapterIndex(start?.chapter ?? 0);
         pendingFraction.current = start?.fraction ?? 0;
         setLoading(false);
@@ -74,11 +90,9 @@ export function ReaderView({
     return () => {
       cancelled = true;
     };
-    // Load once per book.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [book.id]);
 
-  /* ── release blob URLs when leaving ── */
   useEffect(() => {
     return () => {
       setParsed((current) => {
@@ -88,74 +102,54 @@ export function ReaderView({
     };
   }, []);
 
-  /**
-   * The reader renders in its own document, so the app's CSS variables do not
-   * cascade into it. Read the resolved token values once and pass them in, so
-   * the book page and the reader share one palette including dark mode.
-   */
-  const [tokens, setTokens] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    const read = () => {
-      const style = getComputedStyle(document.documentElement);
-      const get = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
-      setTokens({
-        ink: get('--ink', '#211d17'),
-        surface: get('--surface', '#fffdf8'),
-        muted: get('--ink-2', '#5d5448'),
-        accent: get('--accent-strong', '#8b3616'),
-        border: get('--border-strong', '#d3c7b1'),
-        raised: get('--surface-2', '#f7f3ea'),
-      });
-    };
-    read();
-    // Re-read when the OS theme changes, since tokens are theme-dependent.
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
-    media.addEventListener?.('change', read);
-    return () => media.removeEventListener?.('change', read);
-  }, []);
+  /* ── CSS derived from typography ── */
+  const columns = useMemo(() => {
+    const width = stageRef.current?.clientWidth ?? window.innerWidth;
+    return resolveColumns(settings.columns, width, typography.fontSizePx);
+  }, [settings.columns, typography.fontSizePx, ready]);
 
   const readerCss = useMemo(
-    () => `
-:root { color-scheme: light dark; }
-html, body { margin: 0; padding: 0; }
-body {
-  font-family: Georgia, 'Iowan Old Style', 'Times New Roman', serif;
-  font-size: ${fontSize}px;
-  line-height: 1.65;
-  color: ${tokens.ink ?? 'inherit'};
-  background: ${tokens.surface ?? 'transparent'};
-  padding: 0 clamp(16px, 5vw, 64px);
-  -webkit-text-size-adjust: 100%;
-  overflow-wrap: break-word;
-  hyphens: auto;
-}
-#book-content { max-width: 68ch; margin: 0 auto; padding-bottom: 40vh; }
-img, svg, video { max-width: 100%; height: auto; }
-figure { margin: 1.5em 0; }
-figcaption { font-size: 0.85em; color: ${tokens.muted ?? 'inherit'}; font-style: normal; }
-h1, h2, h3, h4 { line-height: 1.25; font-family: Georgia, serif; }
-a { color: ${tokens.accent ?? 'inherit'}; }
-blockquote {
-  margin: 1.2em 0;
-  padding-left: 1em;
-  border-left: 1px solid ${tokens.border ?? 'currentColor'};
-  color: ${tokens.muted ?? 'inherit'};
-}
-pre, code { font-family: ui-monospace, 'Cascadia Code', monospace; font-size: 0.9em; }
-pre { overflow-x: auto; padding: 0.8em; background: ${tokens.raised ?? 'transparent'}; border-radius: 6px; }
-table { border-collapse: collapse; max-width: 100%; }
-td, th { border: 1px solid ${tokens.border ?? 'currentColor'}; padding: 4px 8px; }
-`,
-    [fontSize, tokens],
+    () => buildReaderCss({ typography, mode: settings.mode, theme: settings.theme, columns }),
+    [typography, settings.mode, settings.theme, columns],
   );
 
-  /* ── render the current chapter ── */
+  const persistPosition = useCallback(
+    (chapter: number, fraction: number) => {
+      const next: Position = { chapter, fraction: clampFraction(fraction), updatedAt: Date.now() };
+      const patch: Partial<Book> = { position: next };
+      if (book.totalPages) {
+        Object.assign(patch, progressPatch(book, bookProgress(next, total)));
+      }
+      store.updateBook(book.id, patch);
+    },
+    [book, store, total],
+  );
+
+  /* ── render the chapter, then paginate ── */
+  const repaginate = useCallback(() => {
+    const frame = frameRef.current;
+    const doc = frame?.contentDocument;
+    const stage = stageRef.current;
+    if (!doc || !doc.body || !stage) return;
+    const width = stage.clientWidth;
+    const height = stage.clientHeight;
+    if (width === 0 || height === 0) return;
+
+    const result = paginate(doc, width, height);
+    setPages(result);
+    const target = fractionToPage(pendingFraction.current, result.pageCount);
+    setPageIndex(target);
+    showPage(doc, target, result);
+    pendingFraction.current = 0;
+    setReady(true);
+  }, []);
+
   useEffect(() => {
     if (!parsed || !bufferRef.current) return;
     const chapter = parsed.chapters[chapterIndex];
     if (!chapter) return;
     let cancelled = false;
+    setReady(false);
     (async () => {
       try {
         const html = await chapterHtml(parsed, chapter, bufferRef.current!, readerCss);
@@ -171,46 +165,119 @@ td, th { border: 1px solid ${tokens.border ?? 'currentColor'}; padding: 4px 8px;
     };
   }, [parsed, chapterIndex, readerCss]);
 
-  /* ── restore scroll within a chapter, and save on scroll ── */
-  const persistPosition = useCallback(
-    (chapter: number, fraction: number) => {
-      const next: Position = { chapter, fraction: clampFraction(fraction), updatedAt: Date.now() };
-      const patch: Partial<Book> = { position: next };
-      if (book.totalPages) {
-        Object.assign(patch, progressPatch(book, bookProgress(next, total)));
-      }
-      store.updateBook(book.id, patch);
-    },
-    [book, store, total],
-  );
+  /** Attach the same keys to the book document whenever a chapter loads. */
+  const attachFrameKeys = useCallback(() => {
+    const doc = frameRef.current?.contentDocument;
+    if (!doc) return;
+    doc.addEventListener('keydown', (event) => keyHandlerRef.current(event));
+  }, []);
 
   const onFrameLoad = useCallback(() => {
-    const frame = frameRef.current;
-    const doc = frame?.contentDocument;
-    if (!doc) return;
-    // Stored fraction wins over wherever the fresh document starts.
-    const target = pendingFraction.current;
-    const maxScroll = doc.documentElement.scrollHeight - doc.documentElement.clientHeight;
-    if (maxScroll > 0 && target > 0) {
-      doc.documentElement.scrollTop = Math.round(maxScroll * target);
-      doc.body.scrollTop = Math.round(maxScroll * target);
-    }
-    pendingFraction.current = 0;
+    // Give the frame a tick to lay out fonts and images before measuring.
+    window.setTimeout(() => {
+      repaginate();
+      attachFrameKeys();
+    }, 60);
+  }, [repaginate, attachFrameKeys]);
 
-    let timer: number | undefined;
-    const onScroll = () => {
-      if (timer) window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        const el = doc.documentElement;
-        const max = el.scrollHeight - el.clientHeight;
-        const fraction = max > 0 ? el.scrollTop / max : 0;
-        persistPosition(chapterIndex, fraction);
-      }, 600);
+  /* ── re-measure on resize ── */
+  useEffect(() => {
+    if (!ready) return;
+    const onResize = () => {
+      const doc = frameRef.current?.contentDocument;
+      if (!doc) return;
+      const result = paginate(
+        doc,
+        stageRef.current?.clientWidth ?? 0,
+        stageRef.current?.clientHeight ?? 0,
+      );
+      setPages(result);
+      const clamped = Math.min(pageIndex, result.pageCount - 1);
+      setPageIndex(clamped);
+      showPage(doc, clamped, result);
     };
-    doc.addEventListener('scroll', onScroll, { passive: true });
-  }, [chapterIndex, persistPosition]);
+    let timer: number | undefined;
+    const debounced = () => {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(onResize, 180);
+    };
+    window.addEventListener('resize', debounced);
+    return () => {
+      window.removeEventListener('resize', debounced);
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [ready, pageIndex]);
 
-  /* ── keyboard paging ── */
+  const goToPage = useCallback(
+    (next: number) => {
+      if (!pages) return;
+      const clamped = Math.max(0, Math.min(pages.pageCount - 1, next));
+      setPageIndex(clamped);
+      const doc = frameRef.current?.contentDocument;
+      if (doc) showPage(doc, clamped, pages);
+      persistPosition(chapterIndex, pageToFraction(clamped, pages.pageCount));
+    },
+    [pages, chapterIndex, persistPosition],
+  );
+
+  const turnPage = useCallback(
+    (direction: 1 | -1) => {
+      if (!pages) return;
+      const next = pageIndex + direction;
+      if (next < 0) {
+        if (chapterIndex > 0) {
+          pendingFraction.current = 1;
+          setChapterIndex(chapterIndex - 1);
+          persistPosition(chapterIndex - 1, 1);
+        }
+        return;
+      }
+      if (next >= pages.pageCount) {
+        if (parsed && chapterIndex < parsed.chapters.length - 1) {
+          pendingFraction.current = 0;
+          setChapterIndex(chapterIndex + 1);
+          persistPosition(chapterIndex + 1, 0);
+        }
+        return;
+      }
+      goToPage(next);
+    },
+    [pages, pageIndex, chapterIndex, parsed, goToPage, persistPosition],
+  );
+
+  /* ── keyboard ── */
+  // Keys must work whether focus is in the app or inside the book, because a
+  // reader clicks the text far more often than the chrome. A keydown inside
+  // the iframe never reaches the parent window, so both are listened to.
+  const keyHandlerRef = useRef<(event: KeyboardEvent) => void>(() => {});
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (settingsOpen) setSettingsOpen(false);
+        else if (tocOpen) setTocOpen(false);
+        else onBack();
+        return;
+      }
+      if (event.key.toLowerCase() === 't') {
+        setTocOpen((v) => !v);
+        return;
+      }
+      if (event.key === 'ArrowRight' || event.key === 'PageDown' || event.key === ' ') {
+        event.preventDefault();
+        turnPage(1);
+      }
+      if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
+        event.preventDefault();
+        turnPage(-1);
+      }
+    };
+    keyHandlerRef.current = onKey;
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [turnPage, onBack, tocOpen, settingsOpen]);
+
+
   const goToChapter = useCallback(
     (index: number, fraction = 0) => {
       if (!parsed) return;
@@ -218,45 +285,14 @@ td, th { border: 1px solid ${tokens.border ?? 'currentColor'}; padding: 4px 8px;
       pendingFraction.current = fraction;
       setChapterIndex(clamped);
       persistPosition(clamped, fraction);
+      setTocOpen(false);
     },
     [parsed, persistPosition],
   );
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        if (tocOpen) setTocOpen(false);
-        else onBack();
-        return;
-      }
-      if (event.key === 'ArrowRight' || event.key === 'PageDown') {
-        event.preventDefault();
-        const doc = frameRef.current?.contentDocument;
-        if (doc) {
-          const el = doc.documentElement;
-          const max = el.scrollHeight - el.clientHeight;
-          if (el.scrollTop >= max - 8) goToChapter(chapterIndex + 1, 0);
-          else el.scrollTop = Math.min(max, el.scrollTop + el.clientHeight * 0.92);
-        }
-      }
-      if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
-        event.preventDefault();
-        const doc = frameRef.current?.contentDocument;
-        if (doc) {
-          const el = doc.documentElement;
-          if (el.scrollTop <= 8) goToChapter(chapterIndex - 1, 1);
-          else el.scrollTop = Math.max(0, el.scrollTop - el.clientHeight * 0.92);
-        }
-      }
-      if (event.key.toLowerCase() === 't') setTocOpen((v) => !v);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [chapterIndex, goToChapter, onBack, tocOpen]);
-
-  /* ── progress for the footer ── */
-  const currentPosition: Position = { chapter: chapterIndex, fraction: 0, updatedAt: 0 };
-  const percent = parsed ? bookProgress(position ?? currentPosition, parsed.chapters.length) : 0;
+  const percent = pages
+    ? bookProgress({ chapter: chapterIndex, fraction: pageToFraction(pageIndex, pages.pageCount), updatedAt: 0 }, total || 1)
+    : bookProgress(book.position ?? null, total || 1);
 
   if (error) {
     return (
@@ -274,8 +310,8 @@ td, th { border: 1px solid ${tokens.border ?? 'currentColor'}; padding: 4px 8px;
   }
 
   return (
-    <section className="reader" aria-label={`Reading ${book.title}`}>
-      <header className={chromeVisible ? 'reader-bar visible' : 'reader-bar'}>
+    <section className="reader" aria-label={`Reading ${book.title}`} data-theme-reader={settings.theme}>
+      <header className="reader-bar">
         <button type="button" className="reader-icon-btn" aria-label="Back to book page" onClick={onBack}>
           <Icon name="back" />
         </button>
@@ -284,6 +320,7 @@ td, th { border: 1px solid ${tokens.border ?? 'currentColor'}; padding: 4px 8px;
           {parsed && (
             <span className="reader-chapter">
               {chapterLabel({ chapter: chapterIndex, fraction: 0, updatedAt: 0 }, parsed.chapters.length)}
+              {pages ? ` · page ${pageIndex + 1} of ${pages.pageCount}` : ''}
             </span>
           )}
         </div>
@@ -293,25 +330,24 @@ td, th { border: 1px solid ${tokens.border ?? 'currentColor'}; padding: 4px 8px;
             className="reader-icon-btn"
             aria-label="Table of contents"
             aria-expanded={tocOpen}
-            onClick={() => setTocOpen((v) => !v)}
+            onClick={() => {
+              setTocOpen((v) => !v);
+              setSettingsOpen(false);
+            }}
           >
             <Icon name="shelf" />
           </button>
           <button
             type="button"
             className="reader-icon-btn"
-            aria-label="Decrease text size"
-            onClick={() => setFontSize((s) => Math.max(14, s - 1))}
+            aria-label="Reading settings"
+            aria-expanded={settingsOpen}
+            onClick={() => {
+              setSettingsOpen((v) => !v);
+              setTocOpen(false);
+            }}
           >
-            A−
-          </button>
-          <button
-            type="button"
-            className="reader-icon-btn"
-            aria-label="Increase text size"
-            onClick={() => setFontSize((s) => Math.min(30, s + 1))}
-          >
-            A+
+            Aa
           </button>
         </div>
       </header>
@@ -332,10 +368,7 @@ td, th { border: 1px solid ${tokens.border ?? 'currentColor'}; padding: 4px 8px;
                       type="button"
                       className={targetIndex === chapterIndex ? 'reader-toc-link active' : 'reader-toc-link'}
                       disabled={targetIndex < 0}
-                      onClick={() => {
-                        if (targetIndex >= 0) goToChapter(targetIndex, 0);
-                        setTocOpen(false);
-                      }}
+                      onClick={() => goToChapter(targetIndex, 0)}
                     >
                       {entry.label}
                     </button>
@@ -347,7 +380,14 @@ td, th { border: 1px solid ${tokens.border ?? 'currentColor'}; padding: 4px 8px;
         </>
       )}
 
-      <div className="reader-stage">
+      {settingsOpen && (
+        <>
+          <div className="reader-scrim" onClick={() => setSettingsOpen(false)} />
+          <ReaderSettingsPanel store={settingsStore} onClose={() => setSettingsOpen(false)} />
+        </>
+      )}
+
+      <div className="reader-stage" ref={stageRef}>
         {loading ? (
           <div className="reader-loading">
             <p className="muted">Opening the book…</p>
@@ -367,9 +407,8 @@ td, th { border: 1px solid ${tokens.border ?? 'currentColor'}; padding: 4px 8px;
         <button
           type="button"
           className="reader-nav-btn"
-          aria-label="Previous chapter"
-          disabled={chapterIndex <= 0}
-          onClick={() => goToChapter(chapterIndex - 1, 0)}
+          aria-label="Previous page"
+          onClick={() => turnPage(-1)}
         >
           <Icon name="chevronDown" size={14} className="flip-up" />
         </button>
@@ -389,22 +428,12 @@ td, th { border: 1px solid ${tokens.border ?? 'currentColor'}; padding: 4px 8px;
         <button
           type="button"
           className="reader-nav-btn"
-          aria-label="Next chapter"
-          disabled={!parsed || chapterIndex >= parsed.chapters.length - 1}
-          onClick={() => goToChapter(chapterIndex + 1, 0)}
+          aria-label="Next page"
+          onClick={() => turnPage(1)}
         >
           <Icon name="chevronDown" size={14} />
-        </button>
-        <button
-          type="button"
-          className="reader-nav-btn reader-chrome-toggle"
-          aria-label="Toggle reading controls"
-          onClick={() => setChromeVisible((v) => !v)}
-        >
-          <Icon name="more" size={14} />
         </button>
       </footer>
     </section>
   );
 }
-

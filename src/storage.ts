@@ -293,3 +293,30 @@ export function makeShelf(name: string, sortOrder: number): Shelf {
 }
 
 export const STORAGE_KEY_FOR_TESTS = STORAGE_KEY;
+
+/* ------------------------------------------------------------------ *
+ * Reader settings
+ *
+ * Kept separately from the journal: they are device preferences, not
+ * content, so they do not belong in an export or in a sync payload.
+ * ------------------------------------------------------------------ */
+
+const READER_KEY = 'marginalia.reader.v1';
+
+export function loadReaderSettings(): unknown {
+  try {
+    const raw = window.localStorage.getItem(READER_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveReaderSettings(settings: unknown): boolean {
+  try {
+    window.localStorage.setItem(READER_KEY, JSON.stringify(settings));
+    return true;
+  } catch {
+    return false;
+  }
+}

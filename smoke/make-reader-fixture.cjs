@@ -90,7 +90,12 @@ const chapters = Array.from({ length: 6 }, (_, i) => {
     `<link rel="stylesheet" href="styles/book.css"/></head><body>`,
     `<h1>Chapter ${n}</h1>`,
     n === 3 ? `<img src="images/plate.png" alt="A plate"/>` : '',
-    `<p>${'This is paragraph text for chapter ' + n + '. '.repeat(40)}</p>`,
+    `<p>${'This is paragraph text for chapter ' + n + '. '.repeat(400)}</p>`,
+    `<p>${'The sea does not forgive, but it does forget, and that is nearly the same thing. '.repeat(60)}</p>`,
+
+    `<p>${'A keeper learns the weather the way other children learn their letters. '.repeat(50)}</p>`,
+
+    `<p>${'She counted the ships by their lights. Each one a promise somebody had already broken. '.repeat(50)}</p>`,
     `<p>The sea does not forgive, but it does forget.</p>`,
     `<a href="ch${Math.min(6, n + 1)}.xhtml">Next chapter</a>`,
     `</body></html>`,

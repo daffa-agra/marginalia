@@ -4,7 +4,8 @@ A personal book journal and EPUB reader — your shelves, notes in the margins, 
 
 ## What it does today
 
-- **Read EPUBs** — open a DRM-free EPUB and read it in the app: chapters in spine order, a table of contents from the book's own nav, embedded images and the book's stylesheet preserved, adjustable text size, and a reading position that survives a reload and a font-size change. Book content renders in a sandboxed frame with scripts disabled.
+- **Read EPUBs** — open a DRM-free EPUB and read it **paginated**: chapters in spine order, a table of contents from the book's own nav, embedded images and the book's stylesheet preserved, and a reading position that survives a reload, a font-size change and a repagination. Book content renders in a sandboxed frame with scripts disabled.
+- **Reader typography** — per-book settings with a global default: font size, line length, line height, letter/word/paragraph spacing, alignment, hyphenation, margins, a writing margin for notes, column count, and paper/sepia/night themes. A "preserve the book" mode keeps the publisher's own fonts and layout; "my page" overrides them. One button applies WCAG 1.4.12 text spacing.
 - **Reading plan** — queue the books you mean to read next, in order. Undated by design: it says which book is next, not when to read it. The page reports your measured pace and when the queue would empty at that pace.
 - **Shelves** — group books the way you think of them (*Bedside*, *Research*, *Re-read someday*). **One book, one shelf**, like folders: shelf counts always add up to your library. Unshelved is always there, and deleting a shelf moves its books rather than deleting them.
 - **EPUB upload** — drop a DRM-free EPUB and the title, author, language, publisher, cover and chapter count are read from the book itself. Or add a book by hand as metadata only.
@@ -68,6 +69,7 @@ node smoke/smoke.cjs                  # render, parser, storage, exporters
 node smoke/epub-tests.cjs             # ZIP reader, EPUB metadata, shelves
 node smoke/plan-tests.cjs             # reading plan queue, pace, forecast
 node smoke/reader-tests.cjs           # EPUB opening, TOC, chapters, sanitising
+node smoke/reader-typography-tests.cjs # pagination maths, typography, AA spacing
 ```
 
 The browser suites need the built app served on `http://127.0.0.1:4173`:
@@ -78,6 +80,7 @@ node smoke/verify-trust.cjs           # delete/undo, focus, durability
 node smoke/shelf-upload-tests.cjs     # shelves and upload in a real browser
 node smoke/plan-ui-tests.cjs          # the reading plan in a real browser
 node smoke/reader-ui-tests.cjs         # reading an EPUB in a real browser
+node smoke/reader-pagination-tests.cjs # pagination and customization in a browser
 node smoke/byte-lifecycle.cjs         # book bytes survive undo, clear on expiry
 node smoke/dev-server-check.cjs       # the dev server serves the app
 ```

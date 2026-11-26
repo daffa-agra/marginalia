@@ -139,6 +139,7 @@ for (const [name, file] of [
   ['ZIP, EPUB metadata, shelves', 'smoke/epub-tests.cjs'],
   ['reading plan queue, pace, forecast', 'smoke/plan-tests.cjs'],
   ['reader: opening, TOC, chapters, sanitising', 'smoke/reader-tests.cjs'],
+  ['pagination and typography', 'smoke/reader-typography-tests.cjs'],
 ]) {
   check(name, () => {
     const out = run('node', [file]);
