@@ -8,6 +8,9 @@ dist-backup
 *.local
 .DS_Store
 
+# Design and planning notes stay local
+docs/
+
 # Editor directories
 .vscode/*
 !.vscode/extensions.json
