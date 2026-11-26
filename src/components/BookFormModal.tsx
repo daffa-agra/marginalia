@@ -3,12 +3,21 @@ import { STATUS_ORDER } from '../types';
 import type { Book, ReadStatus } from '../types';
 import { STATUS_META } from '../types';
 import type { JournalStore } from '../useJournal';
+import type { useToasts } from '../lib/toasts';
 import { Modal } from './Modal';
+import { InlineAlert } from './EmptyState';
+import { Icon } from './icons';
 import { parseNonNegativeInt, todayIso } from '../lib/utils';
 
 const COLOR_SWATCHES = [
-  '#b4552d', '#3f6f71', '#5b6d8f', '#8f5b6d',
-  '#6d7a5b', '#a0703c', '#704f8f', '#4f7a5c',
+  { value: '#b4552d', name: 'Rust' },
+  { value: '#3f6f71', name: 'Teal' },
+  { value: '#5b6d8f', name: 'Slate' },
+  { value: '#8f5b6d', name: 'Mulberry' },
+  { value: '#6d7a5b', name: 'Moss' },
+  { value: '#a0703c', name: 'Ochre' },
+  { value: '#704f8f', name: 'Iris' },
+  { value: '#4f7a5c', name: 'Pine' },
 ];
 
 export interface BookFormValues {
@@ -41,7 +50,7 @@ export function emptyFormValues(): BookFormValues {
     startedAt: '',
     finishedAt: '',
     genres: '',
-    color: COLOR_SWATCHES[Math.floor(Math.random() * COLOR_SWATCHES.length)],
+    color: COLOR_SWATCHES[Math.floor(Math.random() * COLOR_SWATCHES.length)].value,
   };
 }
 
@@ -91,11 +100,13 @@ export function BookFormModal({
   book,
   onClose,
   onSaved,
+  notify,
 }: {
   store: JournalStore;
   book?: Book;
   onClose: () => void;
   onSaved: (id: string) => void;
+  notify: ReturnType<typeof useToasts>['notify'];
 }) {
   const [values, setValues] = useState<BookFormValues>(() =>
     book ? formValuesFromBook(book) : emptyFormValues(),
@@ -123,29 +134,36 @@ export function BookFormModal({
       setError('Give the book a title.');
       return;
     }
-    if (values.status === 'finished' && !values.finishedAt) {
-      set('finishedAt', todayIso());
-    }
+    const today = todayIso();
     const patch = valuesToPatch(values);
+    if (values.status === 'finished' && !patch.finishedAt) patch.finishedAt = today;
     if (book) {
       store.updateBook(book.id, patch);
+      notify('Changes saved');
       onSaved(book.id);
     } else {
       const created = store.addBook(patch);
+      notify(`Added “${created.title}”`);
       onSaved(created.id);
     }
   };
+
+  const rating = values.rating;
+  const setRating = (next: number | null) => set('rating', next);
 
   return (
     <Modal title={book ? 'Edit book' : 'Add a book'} onClose={onClose}>
       <form className="form" onSubmit={submit} noValidate>
         <div className="field">
-          <label htmlFor="bf-title">Title *</label>
+          <label htmlFor="bf-title">Title</label>
           <input
             id="bf-title"
             className="input"
             value={values.title}
-            onChange={(e) => set('title', e.target.value)}
+            onChange={(e) => {
+              set('title', e.target.value);
+              setError('');
+            }}
             autoFocus
             required
           />
@@ -159,7 +177,7 @@ export function BookFormModal({
               className="input"
               value={values.author}
               onChange={(e) => set('author', e.target.value)}
-              placeholder="e.g. Ursula K. Le Guin"
+              placeholder="Ursula K. Le Guin"
             />
           </div>
           <div className="field">
@@ -187,14 +205,14 @@ export function BookFormModal({
               className="input"
               value={values.series}
               onChange={(e) => set('series', e.target.value)}
-              placeholder="e.g. Earthsea"
+              placeholder="Earthsea"
             />
           </div>
           <div className="field field-small">
-            <label htmlFor="bf-series-index"># in series</label>
+            <label htmlFor="bf-series-index">Number in series</label>
             <input
               id="bf-series-index"
-              className="input"
+              className="input numeric"
               type="number"
               min={1}
               value={values.seriesIndex}
@@ -208,7 +226,7 @@ export function BookFormModal({
             <label htmlFor="bf-pages">Total pages</label>
             <input
               id="bf-pages"
-              className="input"
+              className="input numeric"
               type="number"
               min={0}
               value={values.totalPages}
@@ -219,7 +237,7 @@ export function BookFormModal({
             <label htmlFor="bf-current">Current page</label>
             <input
               id="bf-current"
-              className="input"
+              className="input numeric"
               type="number"
               min={0}
               value={values.currentPage}
@@ -227,7 +245,7 @@ export function BookFormModal({
             />
           </div>
           <div className="field">
-            <label htmlFor="bf-genres">Genres (comma separated)</label>
+            <label htmlFor="bf-genres">Genres, comma separated</label>
             <input
               id="bf-genres"
               className="input"
@@ -267,26 +285,27 @@ export function BookFormModal({
 
         {values.status === 'finished' && (
           <div className="field">
-            <label id="rating-label">Rating</label>
-            <div className="rating-input" role="radiogroup" aria-labelledby="rating-label">
+            <span className="field-label" id="rating-label">
+              Rating
+            </span>
+            <div className="rating-input" role="group" aria-labelledby="rating-label">
               {[1, 2, 3, 4, 5].map((n) => (
                 <button
                   key={n}
                   type="button"
-                  role="radio"
-                  aria-checked={values.rating === n}
+                  aria-pressed={rating === n}
                   aria-label={`${n} star${n > 1 ? 's' : ''}`}
-                  className={values.rating && n <= values.rating ? 'star on' : 'star'}
-                  onClick={() => set('rating', values.rating === n ? null : n)}
+                  className={rating && n <= rating ? 'star-button on' : 'star-button'}
+                  onClick={() => setRating(rating === n ? null : n)}
                 >
-                  {values.rating && n <= values.rating ? '★' : '☆'}
+                  <Icon name="star" size={20} />
                 </button>
               ))}
               <button
                 type="button"
-                className="btn btn-ghost"
-                onClick={() => set('rating', null)}
-                disabled={values.rating == null}
+                className="btn btn-ghost btn-small"
+                onClick={() => setRating(null)}
+                disabled={rating == null}
               >
                 Clear
               </button>
@@ -306,29 +325,26 @@ export function BookFormModal({
           />
         </div>
 
-        <fieldset className="field">
+        <fieldset className="field swatch-field">
           <legend>Spine color</legend>
           <div className="swatch-row" role="radiogroup" aria-label="Spine color">
             {COLOR_SWATCHES.map((c) => (
               <button
-                key={c}
+                key={c.value}
                 type="button"
                 role="radio"
-                aria-checked={values.color === c}
-                aria-label={`Color ${c}`}
-                className={values.color === c ? 'swatch selected' : 'swatch'}
-                style={{ backgroundColor: c }}
-                onClick={() => set('color', c)}
+                aria-checked={values.color === c.value}
+                aria-label={c.name}
+                title={c.name}
+                className={values.color === c.value ? 'swatch selected' : 'swatch'}
+                style={{ backgroundColor: c.value }}
+                onClick={() => set('color', c.value)}
               />
             ))}
           </div>
         </fieldset>
 
-        {error && (
-          <p className="form-error" role="alert">
-            {error}
-          </p>
-        )}
+        {error && <InlineAlert>{error}</InlineAlert>}
 
         <div className="form-actions">
           <button type="button" className="btn" onClick={onClose}>

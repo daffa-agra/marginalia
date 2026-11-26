@@ -1,8 +1,15 @@
 import type { JournalStore } from '../useJournal';
+import type { useToasts } from '../lib/toasts';
 import { QuoteList } from '../components/QuoteList';
 import { EmptyState } from '../components/EmptyState';
 
-export function QuotesView({ store }: { store: JournalStore }) {
+export function QuotesView({
+  store,
+  notify,
+}: {
+  store: JournalStore;
+  notify: ReturnType<typeof useToasts>['notify'];
+}) {
   const { data } = store;
   const titleById = new Map(data.books.map((b) => [b.id, b.title]));
 
@@ -10,12 +17,13 @@ export function QuotesView({ store }: { store: JournalStore }) {
     return (
       <section className="view" aria-labelledby="quotes-title">
         <div className="view-head">
-          <h1 id="quotes-title">Quotes &amp; notes</h1>
+          <div>
+            <h1 id="quotes-title">Quotes &amp; notes</h1>
+          </div>
         </div>
         <EmptyState
-          icon="❝"
           title="No quotes collected yet"
-          body="Save passages as you read, or import the notes you exported from Play Books."
+          body="Open a book from the library and choose Add quote, or import the notes you exported from Play Books."
         />
       </section>
     );
@@ -34,6 +42,7 @@ export function QuotesView({ store }: { store: JournalStore }) {
       <QuoteList
         quotes={data.quotes}
         store={store}
+        notify={notify}
         showBookTitles
         titleById={titleById}
         emptyMessage=""

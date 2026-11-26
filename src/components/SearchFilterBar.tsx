@@ -1,6 +1,5 @@
-import { STATUS_ORDER } from '../types';
 import type { ReadStatus } from '../types';
-import { STATUS_META } from '../types';
+import { STATUS_META, STATUS_ORDER } from '../types';
 
 export function SearchFilterBar({
   query,
@@ -36,21 +35,44 @@ export function SearchFilterBar({
     })),
   ];
 
+  // A filter group, not a tab control: arrows move between radios.
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const keys = ['ArrowRight', 'ArrowLeft', 'Home', 'End'];
+    if (!keys.includes(event.key)) return;
+    event.preventDefault();
+    const group = event.currentTarget;
+    const radios = [...group.querySelectorAll<HTMLButtonElement>('button[role="radio"]')];
+    // Derive the position from what actually has focus, not from state that
+    // may be a render behind.
+    const current = radios.indexOf(document.activeElement as HTMLButtonElement);
+    const from = current >= 0 ? current : Math.max(0, selectedIndex);
+    let next = from;
+    if (event.key === 'ArrowRight') next = (from + 1) % radios.length;
+    if (event.key === 'ArrowLeft') next = (from - 1 + radios.length) % radios.length;
+    if (event.key === 'Home') next = 0;
+    if (event.key === 'End') next = radios.length - 1;
+    radios[next]?.focus();
+    onStatus(statusTabs[next].value);
+  };
+
+  const selectedIndex = statusTabs.findIndex((t) => t.value === status);
+
   return (
     <div className="filter-bar">
       <div className="filter-row">
-        <div className="status-tabs" role="tablist" aria-label="Filter by status">
-          {statusTabs.map((t) => (
+        <div className="status-tabs" role="radiogroup" aria-label="Filter by status" onKeyDown={onKeyDown}>
+          {statusTabs.map((t, index) => (
             <button
               key={t.value}
               type="button"
-              role="tab"
-              aria-selected={status === t.value}
+              role="radio"
+              aria-checked={status === t.value}
+              tabIndex={index === selectedIndex ? 0 : -1}
               className={status === t.value ? 'tab active' : 'tab'}
               onClick={() => onStatus(t.value)}
             >
-              {t.label}
-              <span className="tab-count">{t.count}</span>
+              <span>{t.label}</span>
+              <span className="tab-count numeric">{t.count}</span>
             </button>
           ))}
         </div>
@@ -62,7 +84,7 @@ export function SearchFilterBar({
             id="library-search"
             type="search"
             className="input search-input"
-            placeholder="Search title, author, series…"
+            placeholder="Search title, author, series"
             value={query}
             onChange={(e) => onQuery(e.target.value)}
           />

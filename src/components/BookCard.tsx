@@ -1,21 +1,23 @@
-import { STATUS_META, progressPercent } from '../types';
-import type { Book } from '../types';
+import { progressPercent } from '../types';
+import type { Book, ReadStatus } from '../types';
 import { pagesLeft, pagesSummary } from '../lib/utils';
+import { Icon } from './icons';
+import { RatingStars, StatusMenu } from './StatusMenu';
 
 export function BookCard({
   book,
   quoteCount,
   onOpen,
-  onAdvanceStatus,
+  onStatusChange,
 }: {
   book: Book;
   quoteCount: number;
   onOpen: () => void;
-  onAdvanceStatus: () => void;
+  onStatusChange: (next: ReadStatus) => void;
 }) {
-  const meta = STATUS_META[book.status];
   const pct = progressPercent(book);
   const showProgress = book.status === 'reading' && book.totalPages;
+  const isSample = book.id.startsWith('demo-');
 
   return (
     <article className={`book-card status-${book.status}`}>
@@ -36,17 +38,9 @@ export function BookCard({
             ) : null}
           </p>
           <div className="book-meta-row">
-            <span className={`status-chip chip-${book.status}`}>
-              <span aria-hidden="true">{meta.icon}</span> {meta.label}
-            </span>
-            {book.rating ? (
-              <span className="rating" aria-label={`Rated ${book.rating} of 5`}>
-                <span aria-hidden="true">{'★'.repeat(book.rating)}</span>
-                <span aria-hidden="true" className="rating-empty">
-                  {'☆'.repeat(5 - book.rating)}
-                </span>
-              </span>
-            ) : null}
+            <StatusMenu compact status={book.status} onChange={onStatusChange} label={`Status of ${book.title}`} />
+            {book.rating ? <RatingStars rating={book.rating} /> : null}
+            {isSample && <span className="sample-tag">Sample</span>}
           </div>
           {showProgress ? (
             <div className="progress-wrap">
@@ -58,7 +52,7 @@ export function BookCard({
                 aria-valuemax={100}
                 aria-label={`${book.title} progress`}
               >
-                <div className="progress-fill" style={{ width: `${pct}%` }} />
+                <div className="progress-fill" style={{ transform: `scaleX(${pct / 100})` }} />
               </div>
               <span className="progress-caption muted">
                 {pagesSummary(book.currentPage, book.totalPages)} · {pagesLeft(book.currentPage, book.totalPages)} to go
@@ -77,31 +71,16 @@ export function BookCard({
         </div>
       </div>
       <div className="book-card-foot">
-        <button type="button" className="btn btn-ghost" onClick={onOpen}>
+        <button type="button" className="btn btn-ghost btn-small" onClick={onOpen}>
           Open
-        </button>
-        <button type="button" className="btn btn-ghost" onClick={onAdvanceStatus}>
-          Move to {STATUS_META[nextStatus(book.status)].label.toLowerCase()}
         </button>
         {quoteCount > 0 && (
           <span className="quote-count" title={`${quoteCount} quotes`}>
-            ❝ {quoteCount}
+            <Icon name="quote" size={12} />
+            <span className="numeric">{quoteCount}</span>
           </span>
         )}
       </div>
     </article>
   );
-}
-
-function nextStatus(status: Book['status']): Book['status'] {
-  switch (status) {
-    case 'want-to-read':
-      return 'reading';
-    case 'reading':
-      return 'finished';
-    case 'finished':
-      return 'want-to-read';
-    case 'abandoned':
-      return 'reading';
-  }
 }

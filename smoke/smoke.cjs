@@ -37,10 +37,10 @@ const checks = [
   ['add button', 'Add book'],
   ['sample book', 'Piranesi'],
   ['sample book 2', 'Tomorrow, and Tomorrow, and Tomorrow'],
-  ['status chip', 'Reading'],
-  ['rating stars', '★'],
+  ['status menu', 'Want to read'],
+  ['rating stars (authored icons carry an accessible name)', 'aria-label="Rated 5 of 5"'],
   ['import button', 'Import notes'],
-  ['demo banner', 'sample shelf'],
+  ['demo banner', 'sample books'],
 ];
 for (const [name, needle] of checks) {
   assert.ok(html.includes(needle), `render missing ${name}: "${needle}"`);

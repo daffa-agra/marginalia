@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import type { JournalStore } from '../useJournal';
+import type { useToasts } from '../lib/toasts';
 import { Modal } from './Modal';
 import { parseAnnotationFile } from '../lib/playbooks';
 import type { ParsedFile } from '../lib/playbooks';
 import { makeId } from '../lib/utils';
 import type { Book } from '../types';
+import { Icon } from './icons';
 
 interface ImportRow {
   quoteText: string;
@@ -19,6 +21,8 @@ interface ImportTarget {
   rows: ImportRow[];
   /** Existing book id if we matched one by title. */
   matchedBookId?: string;
+  /** True when the matched id came from the reader picking a book, not the matcher. */
+  chosenManually?: boolean;
   /** When no book matched, the user can create one with an author override. */
   newAuthor: string;
   createNew: boolean;
@@ -44,16 +48,17 @@ export function ImportModal({
   store,
   onClose,
   onOpenBook,
+  notify,
 }: {
   store: JournalStore;
   onClose: () => void;
   onOpenBook: (id: string) => void;
+  notify: ReturnType<typeof useToasts>['notify'];
 }) {
   const [parsed, setParsed] = useState<ParsedFile | null>(null);
   const [targets, setTargets] = useState<ImportTarget[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [warning, setWarning] = useState('');
-  const [done, setDone] = useState<Array<{ bookId: string; count: number }>>([]);
 
   const handleFile = (file: File) => {
     const reader = new FileReader();
@@ -62,12 +67,11 @@ export function ImportModal({
       try {
         const result = parseAnnotationFile(file.name, content);
         if (result.docs.length === 0) {
-          setWarning(`Nothing importable found in "${file.name}".`);
+          setWarning(`Nothing importable found in “${file.name}”.`);
           return;
         }
         setParsed(result);
         setWarning('');
-        setDone([]);
         setTargets(
           result.docs.map((doc) => {
             const match = findMatch(doc.bookTitle, store.data.books);
@@ -90,7 +94,8 @@ export function ImportModal({
   };
 
   const importAll = () => {
-    const results: Array<{ bookId: string; count: number }> = [];
+    let totalImported = 0;
+    let firstBookId: string | undefined;
     for (const target of targets) {
       if (target.rows.length === 0) continue;
       let bookId = target.matchedBookId;
@@ -100,40 +105,44 @@ export function ImportModal({
           author: target.newAuthor.trim() || target.author || 'Unknown author',
           status: 'want-to-read',
           currentPage: 0,
-          genres: ['Imported'],
+          genres: [],
           color: '#704f8f',
         });
         bookId = created.id;
       }
       if (!bookId) continue;
-      const existing = new Set(
-        (store.quotesByBook.get(bookId) ?? []).map((q) => q.text.toLowerCase()),
-      );
+      const existing = new Set((store.quotesByBook.get(bookId) ?? []).map((q) => q.text.toLowerCase()));
       const fresh = target.rows.filter((r) => !existing.has(r.quoteText.toLowerCase()));
       if (fresh.length > 0) {
         store.addQuotes(
           bookId,
           fresh.map((r) => ({ text: r.quoteText, note: r.note, position: r.position })),
         );
+        totalImported += fresh.length;
       }
-      results.push({ bookId, count: fresh.length });
+      firstBookId = firstBookId ?? bookId;
     }
-    setDone(results);
+    const skipped = totalCount - totalImported;
+    const summary =
+      totalImported === 0
+        ? 'These highlights are already in your journal'
+        : `Imported ${totalImported} highlight${totalImported === 1 ? '' : 's'}${skipped > 0 ? `, skipped ${skipped} already saved` : ''}`;
+    notify(summary);
+    onClose();
+    if (firstBookId) onOpenBook(firstBookId);
   };
 
   const setTarget = (key: string, patch: Partial<ImportTarget>) =>
     setTargets((ts) => ts.map((t) => (t.key === key ? { ...t, ...patch } : t)));
 
   useEffect(() => {
-    if (done.length === 0) return;
-    const timer = window.setTimeout(() => {
-      const first = done[0];
-      if (first) onOpenBook(first.bookId);
-    }, 900);
-    return () => window.clearTimeout(timer);
-  }, [done, onOpenBook]);
+    document.title = 'Import highlights — Marginalia';
+    return () => {
+      document.title = 'Marginalia — Book journal';
+    };
+  }, []);
 
-  const step: 'pick' | 'review' | 'done' = done.length > 0 ? 'done' : parsed ? 'review' : 'pick';
+  const step: 'pick' | 'review' = parsed ? 'review' : 'pick';
   const totalCount = targets.reduce((sum, t) => sum + t.rows.length, 0);
 
   return (
@@ -153,10 +162,8 @@ export function ImportModal({
             if (file) handleFile(file);
           }}
         >
-          <p className="dropzone-icon" aria-hidden="true">
-            ⬇
-          </p>
-          <p>Drop your Play Books notes export here, or</p>
+          <Icon name="import" size={24} className="dropzone-icon" />
+          <p className="dropzone-lead">Drop your Play Books notes export here</p>
           <label className="btn btn-primary file-label">
             Choose a file
             <input
@@ -169,26 +176,21 @@ export function ImportModal({
               }}
             />
           </label>
-          <p className="muted">
-            In the Play Books app: open a book → Notes → Export notes. It saves a document to
-            your Google Drive — download it (or any .txt/.md/.csv/.json/.html notes file) and drop
-            it here.
+          <p className="muted dropzone-help">
+            In the Play Books app, open a book → Notes → Export notes. Google saves a document to your
+            Drive; download it, or use any .txt, .md, .csv, .json or .html notes file.
           </p>
-          {warning && (
-            <p className="form-error" role="alert">
-              {warning}
-            </p>
-          )}
+          {warning && <p className="inline-alert danger">{warning}</p>}
         </div>
       )}
 
       {step === 'review' && parsed && (
         <div>
-          <p className="muted">
-            <strong>{parsed.filename}</strong> — {totalCount} highlight{totalCount === 1 ? '' : 's'} found.
+          <p className="muted import-summary">
+            <strong>{parsed.filename}</strong> · {totalCount} highlight{totalCount === 1 ? '' : 's'}
           </p>
           {parsed.warnings.map((w, i) => (
-            <p key={i} className="import-warning">
+            <p key={i} className="inline-alert warning">
               {w}
             </p>
           ))}
@@ -205,13 +207,22 @@ export function ImportModal({
                 <div className="import-target-controls">
                   {target.matchedBookId ? (
                     <>
-                      <span className="match-chip">Matches your copy</span>
+                      <span className="match-chip">
+                        {target.chosenManually ? 'Attached to' : 'Matches'}{' '}
+                        {store.data.books.find((b) => b.id === target.matchedBookId)?.title}
+                      </span>
                       <button
                         type="button"
-                        className="btn btn-ghost"
-                        onClick={() => setTarget(target.key, { matchedBookId: undefined, createNew: true })}
+                        className="btn btn-ghost btn-small"
+                        onClick={() =>
+                          setTarget(target.key, {
+                            matchedBookId: undefined,
+                            chosenManually: false,
+                            createNew: true,
+                          })
+                        }
                       >
-                        Create new instead
+                        Choose another book
                       </button>
                     </>
                   ) : (
@@ -221,10 +232,15 @@ export function ImportModal({
                         className="input select"
                         value=""
                         onChange={(e) => {
-                          if (e.target.value) setTarget(target.key, { matchedBookId: e.target.value, createNew: false });
+                          if (e.target.value)
+                            setTarget(target.key, {
+                              matchedBookId: e.target.value,
+                              chosenManually: true,
+                              createNew: false,
+                            });
                         }}
                       >
-                        <option value="">Create a new book…</option>
+                        <option value="">Create a new book</option>
                         {store.data.books.map((b) => (
                           <option key={b.id} value={b.id}>
                             {b.title}
@@ -244,15 +260,17 @@ export function ImportModal({
                   )}
                 </div>
               </div>
-              <ul className="import-preview" role="list">
-                {target.rows.slice(0, 4).map((row, i) => (
+              <ul className="import-preview">
+                {target.rows.slice(0, 3).map((row, i) => (
                   <li key={i}>
                     <blockquote>“{row.quoteText}”</blockquote>
                     {row.note && <p className="muted">Note: {row.note}</p>}
                     {row.position && <p className="muted">{row.position}</p>}
                   </li>
                 ))}
-                {target.rows.length > 4 && <li className="muted">…and {target.rows.length - 4} more</li>}
+                {target.rows.length > 3 && (
+                  <li className="muted">and {target.rows.length - 3} more</li>
+                )}
               </ul>
             </div>
           ))}
@@ -271,24 +289,6 @@ export function ImportModal({
               Import {totalCount} highlight{totalCount === 1 ? '' : 's'}
             </button>
           </div>
-        </div>
-      )}
-
-      {step === 'done' && (
-        <div className="import-done" role="status">
-          <p className="dropzone-icon" aria-hidden="true">
-            ✓
-          </p>
-          {done.map((d) => (
-            <p key={d.bookId}>
-              Imported{' '}
-              <strong>
-                {d.count} highlight{d.count === 1 ? '' : 's'}
-              </strong>{' '}
-              into <strong>{store.data.books.find((b) => b.id === d.bookId)?.title ?? 'your journal'}</strong>.
-            </p>
-          ))}
-          <p className="muted">Opening the book…</p>
         </div>
       )}
     </Modal>

@@ -1,17 +1,29 @@
 import { useState } from 'react';
 import type { JournalStore } from '../useJournal';
+import type { useToasts } from '../lib/toasts';
 import { Modal } from './Modal';
 import { sanitizeData, mergeData } from '../storage';
 import { exportCsv, exportJson, exportMarkdown, exportQuotesCsv, downloadTextFile } from '../lib/exporters';
 import type { ExportFile } from '../lib/exporters';
+import { Icon } from './icons';
 
-export function DataModal({ store, onClose }: { store: JournalStore; onClose: () => void }) {
-  const [message, setMessage] = useState('');
+export function DataModal({
+  store,
+  onClose,
+  notify,
+  returnFocusTo,
+}: {
+  store: JournalStore;
+  onClose: () => void;
+  notify: ReturnType<typeof useToasts>['notify'];
+  returnFocusTo?: string;
+}) {
   const [confirming, setConfirming] = useState(false);
 
   const doExport = (make: () => ExportFile) => {
-    downloadTextFile(make());
-    setMessage('Download started.');
+    const file = make();
+    downloadTextFile(file);
+    notify(`Downloaded ${file.filename}`);
   };
 
   const handleImport = (file: File) => {
@@ -20,32 +32,32 @@ export function DataModal({ store, onClose }: { store: JournalStore; onClose: ()
       try {
         const incoming = sanitizeData(JSON.parse(String(reader.result)));
         if (incoming.books.length === 0 && incoming.quotes.length === 0) {
-          setMessage('That file has no books or quotes.');
+          notify('That file has no books or quotes', { tone: 'danger' });
           return;
         }
         store.replaceAll(mergeData(store.data, incoming));
-        setMessage(
-          `Merged ${incoming.books.length} book${incoming.books.length === 1 ? '' : 's'} and ${incoming.quotes.length} quote${incoming.quotes.length === 1 ? '' : 's'}.`,
+        notify(
+          `Merged ${incoming.books.length} book${incoming.books.length === 1 ? '' : 's'} and ${incoming.quotes.length} quote${incoming.quotes.length === 1 ? '' : 's'}`,
         );
       } catch {
-        setMessage('Could not read that file — expected a Marginalia JSON export.');
+        notify('Could not read that file — expected a Marginalia JSON export', { tone: 'danger' });
       }
     };
     reader.readAsText(file);
   };
 
   return (
-    <Modal title="Your data" onClose={onClose}>
+    <Modal title="Your data" onClose={onClose} returnFocusTo={returnFocusTo}>
       <p className="muted">
-        Everything lives in this browser's local storage — there is no server. Export regularly to
-        keep a backup.
+        Everything lives in this browser's local storage. There is no server — export regularly to keep
+        a backup.
       </p>
 
       <div className="data-section">
         <h3>Export</h3>
         <div className="data-actions">
           <button type="button" className="btn" onClick={() => doExport(() => exportJson(store.data))}>
-            Full backup (JSON)
+            <Icon name="shelf" size={14} /> Full backup (JSON)
           </button>
           <button type="button" className="btn" onClick={() => doExport(() => exportMarkdown(store.data))}>
             Journal (Markdown)
@@ -62,7 +74,7 @@ export function DataModal({ store, onClose }: { store: JournalStore; onClose: ()
       <div className="data-section">
         <h3>Restore</h3>
         <label className="btn file-label">
-          Choose a JSON backup…
+          Choose a JSON backup
           <input
             type="file"
             accept=".json,application/json"
@@ -73,7 +85,7 @@ export function DataModal({ store, onClose }: { store: JournalStore; onClose: ()
             }}
           />
         </label>
-        <p className="muted">Books and quotes are merged in; duplicates by id are skipped.</p>
+        <p className="muted">Books and quotes are merged in. Entries with an existing id are kept as they are.</p>
       </div>
 
       <div className="data-section">
@@ -81,8 +93,7 @@ export function DataModal({ store, onClose }: { store: JournalStore; onClose: ()
         {confirming ? (
           <div className="confirm-box">
             <p>
-              Delete all books and quotes and restore the sample shelf? This cannot be undone —
-              export first if in doubt.
+              Delete every book and quote and return to the sample shelf? This cannot be undone.
             </p>
             <div className="form-actions">
               <button type="button" className="btn" onClick={() => setConfirming(false)}>
@@ -94,7 +105,7 @@ export function DataModal({ store, onClose }: { store: JournalStore; onClose: ()
                 onClick={() => {
                   store.clearAll();
                   setConfirming(false);
-                  setMessage('Journal reset to the sample shelf.');
+                  notify('Journal reset to the sample shelf', { tone: 'danger' });
                 }}
               >
                 Delete everything
@@ -103,16 +114,10 @@ export function DataModal({ store, onClose }: { store: JournalStore; onClose: ()
           </div>
         ) : (
           <button type="button" className="btn btn-danger" onClick={() => setConfirming(true)}>
-            Clear all data…
+            Clear all data
           </button>
         )}
       </div>
-
-      {message && (
-        <p className="data-message" role="status">
-          {message}
-        </p>
-      )}
     </Modal>
   );
 }

@@ -1,5 +1,28 @@
 export type ReadStatus = 'want-to-read' | 'reading' | 'finished' | 'abandoned';
 
+/**
+ * A shelf is a grouping you create — a drawer, not a tag.
+ * A book belongs to at most one shelf, so shelves partition the library.
+ */
+export interface Shelf {
+  id: string;
+  name: string;
+  /** Manual order of the shelves themselves. */
+  sortOrder: number;
+  createdAt: number;
+}
+
+/** The shelf id every book carries when it is on no shelf of its own. */
+export const UNSHELVED = 'unshelved';
+
+export interface EpubFile {
+  kind: 'epub';
+  fileName: string;
+  size: number;
+  /** Where the bytes live right now. */
+  storage: 'local';
+}
+
 export interface Book {
   id: string;
   title: string;
@@ -20,6 +43,10 @@ export interface Book {
   finishedAt?: string;
   genres: string[];
   color: string;
+  /** At most one shelf. Absent means Unshelved. */
+  shelfId?: string;
+  /** Present once an EPUB has been attached to this book. */
+  file?: EpubFile;
   /** Unix ms when the book was added to the journal. */
   createdAt: number;
 }
@@ -39,16 +66,17 @@ export interface JournalData {
   version: number;
   books: Book[];
   quotes: Quote[];
+  shelves: Shelf[];
 }
 
 export const STATUS_META: Record<
   ReadStatus,
-  { label: string; plural: string; icon: string }
+  { label: string; plural: string; icon: 'statusWant' | 'statusReading' | 'statusFinished' | 'statusAbandoned' }
 > = {
-  'want-to-read': { label: 'Want to read', plural: 'Want to read', icon: '○' },
-  reading: { label: 'Reading', plural: 'Reading', icon: '◐' },
-  finished: { label: 'Finished', plural: 'Finished', icon: '●' },
-  abandoned: { label: 'Abandoned', plural: 'Abandoned', icon: '×' },
+  'want-to-read': { label: 'Want to read', plural: 'Want to read', icon: 'statusWant' },
+  reading: { label: 'Reading', plural: 'Reading', icon: 'statusReading' },
+  finished: { label: 'Finished', plural: 'Finished', icon: 'statusFinished' },
+  abandoned: { label: 'Abandoned', plural: 'Abandoned', icon: 'statusAbandoned' },
 };
 
 export const STATUS_ORDER: ReadStatus[] = [

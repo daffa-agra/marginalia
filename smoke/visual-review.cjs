@@ -208,8 +208,10 @@ async function main() {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
 
-  // Data modal
-  await page.getByRole('button', { name: 'Data', exact: true }).first().click();
+  // Data modal (now behind the header menu)
+  await page.getByRole('button', { name: 'Your data and backups' }).first().click();
+  await page.waitForTimeout(180);
+  await page.locator('.more-item').first().click();
   await page.waitForTimeout(300);
   await shot(page, '07-data-modal');
   await auditPage(page, 'data-modal');
