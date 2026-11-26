@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { JournalStore } from '../useJournal';
 import type { useToasts } from '../lib/toasts';
 import { Modal } from './Modal';
@@ -6,6 +6,7 @@ import { sanitizeData, mergeData } from '../storage';
 import { exportCsv, exportJson, exportMarkdown, exportQuotesCsv, downloadTextFile } from '../lib/exporters';
 import type { ExportFile } from '../lib/exporters';
 import { Icon } from './icons';
+import { estimateStorage, formatBytes } from '../lib/bookFiles';
 
 export function DataModal({
   store,
@@ -49,9 +50,14 @@ export function DataModal({
   return (
     <Modal title="Your data" onClose={onClose} returnFocusTo={returnFocusTo}>
       <p className="muted">
-        Everything lives in this browser's local storage. There is no server — export regularly to keep
-        a backup.
+        Your writing is kept in this browser's IndexedDB — nothing leaves the device. Export
+        regularly to keep a backup.
       </p>
+
+      <div className="data-section">
+        <h3>Storage</h3>
+        <StorageRow />
+      </div>
 
       <div className="data-section">
         <h3>Export</h3>
@@ -119,5 +125,35 @@ export function DataModal({
         )}
       </div>
     </Modal>
+  );
+}
+
+function StorageRow() {
+  const [quota, setQuota] = useState<{ usage: number; quota: number; persisted: boolean } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    estimateStorage()
+      .then((estimate) => {
+        if (!cancelled) setQuota(estimate);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!quota || quota.quota === 0) return null;
+  return (
+    <div className="storage-row">
+      <span className="numeric">
+        {formatBytes(quota.usage)} used of {formatBytes(quota.quota)}
+      </span>
+      <span className="muted">
+        {quota.persisted === false
+          ? 'Books may be cleared by the browser when space runs short — exports stay safe.'
+          : 'Durable storage granted; books survive space pressure.'}
+      </span>
+    </div>
   );
 }

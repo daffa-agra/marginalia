@@ -1,8 +1,7 @@
-import type { Book, JournalData, Quote, ReadStatus, Shelf } from './types';
+import type { Book, JournalData, JournalEntry, Quote, ReadStatus, Shelf } from './types';
 import { makeId } from './lib/utils';
 
 const STORAGE_KEY = 'marginalia.journal.v1';
-const DATA_VERSION = 1;
 
 /* ------------------------------------------------------------------ *
  * Storage health
@@ -51,6 +50,11 @@ export function getStorageHealth(): StorageHealth {
   return health;
 }
 
+/** Published by the IDB write path so one channel reports all storage failures. */
+export function publishStorageHealth(patch: Partial<StorageHealth>) {
+  publish(patch);
+}
+
 /**
  * Boot probe: a real write/read/delete round trip. Catches private mode,
  * quota exhaustion and storage disabled by policy before the user types
@@ -74,7 +78,7 @@ export function probeStorage(): boolean {
 }
 
 export function emptyData(): JournalData {
-  return { version: DATA_VERSION, books: [], quotes: [], shelves: [] };
+  return { version: 3, books: [], quotes: [], shelves: [], entries: [] };
 }
 
 export function loadData(): JournalData {
@@ -140,12 +144,25 @@ export function sanitizeData(input: unknown): JournalData {
     .map((s) => pickShelf(s))
     .filter((s): s is Shelf => s !== null);
 
+  const rawEntries = Array.isArray(raw.entries) ? raw.entries : [];
+  const entryBookIds = new Set(out.books.map((b) => b.id));
+  out.entries = rawEntries
+    .map((e) => pickEntry(e))
+    .filter((e): e is JournalEntry => e !== null)
+    .filter((e) => !e.bookId || entryBookIds.has(e.bookId));
+
   // A book pointing at a shelf that no longer exists falls back to Unshelved,
   // so the one-book-one-shelf partition can never be broken by bad data.
   const shelfIds = new Set(out.shelves.map((s) => s.id));
   out.books = out.books.map((b) =>
     b.shelfId && !shelfIds.has(b.shelfId) ? { ...b, shelfId: undefined } : b,
   );
+
+  // v2 data predates sync bookkeeping; stamp it on ingest so LWW has a baseline.
+  const stamp = Date.now();
+  out.books = out.books.map((b) => ({ ...b, updatedAt: b.updatedAt ?? b.createdAt ?? stamp }));
+  out.quotes = out.quotes.map((q) => ({ ...q, updatedAt: q.updatedAt ?? q.createdAt ?? stamp }));
+  out.shelves = out.shelves.map((s) => ({ ...s, updatedAt: s.updatedAt ?? s.createdAt ?? stamp }));
 
   return out;
 }
@@ -203,6 +220,8 @@ function pickBook(b: unknown): Book | null {
     shelfId: str(raw.shelfId),
     file: pickEpubFile(raw.file),
     createdAt: num(raw.createdAt) ?? Date.now(),
+    updatedAt: num(raw.updatedAt) ?? num(raw.createdAt) ?? Date.now(),
+    deletedAt: typeof raw.deletedAt === 'number' ? raw.deletedAt : undefined,
   };
 }
 
@@ -226,6 +245,8 @@ function pickShelf(s: unknown): Shelf | null {
     name,
     sortOrder: num(raw.sortOrder) ?? 0,
     createdAt: num(raw.createdAt) ?? Date.now(),
+    updatedAt: num(raw.updatedAt) ?? num(raw.createdAt) ?? Date.now(),
+    deletedAt: typeof raw.deletedAt === 'number' ? raw.deletedAt : undefined,
   };
 }
 
@@ -243,6 +264,30 @@ function pickQuote(q: unknown): Quote | null {
     note: str(raw.note),
     position: str(raw.position),
     createdAt: num(raw.createdAt) ?? Date.now(),
+    updatedAt: num(raw.updatedAt) ?? num(raw.createdAt) ?? Date.now(),
+    deletedAt: typeof raw.deletedAt === 'number' ? raw.deletedAt : undefined,
+  };
+}
+
+function pickEntry(e: unknown): JournalEntry | null {
+  if (!e || typeof e !== 'object') return null;
+  const raw = e as Record<string, unknown>;
+  const id = str(raw.id);
+  const text = str(raw.text);
+  if (!id || !text) return null;
+  const page = num(raw.page);
+  const percent = num(raw.percent);
+  return {
+    id,
+    bookId: str(raw.bookId),
+    text,
+    onDate: date(raw.onDate),
+    page: page != null && page >= 0 ? Math.round(page) : undefined,
+    cfi: str(raw.cfi),
+    percent: percent != null && percent >= 0 && percent <= 100 ? percent : undefined,
+    createdAt: num(raw.createdAt) ?? Date.now(),
+    updatedAt: num(raw.updatedAt) ?? num(raw.createdAt) ?? Date.now(),
+    deletedAt: typeof raw.deletedAt === 'number' ? raw.deletedAt : undefined,
   };
 }
 
@@ -253,12 +298,16 @@ function pickQuote(q: unknown): Quote | null {
 export function mergeData(current: JournalData, incoming: JournalData): JournalData {
   const bookIds = new Set(current.books.map((b) => b.id));
   const quoteIds = new Set(current.quotes.map((q) => q.id));
-  // Older exports (and hand-written files) predate shelves entirely.
+  // Older callers may hand over v2-shaped data without entries.
+  const currentEntries = Array.isArray(current.entries) ? current.entries : [];
+  const incomingEntries = Array.isArray(incoming.entries) ? incoming.entries : [];
+  const entryIds = new Set(currentEntries.map((e) => e.id));
+  // Older exports (and hand-written files) predate shelves and entries entirely.
   const currentShelves = Array.isArray(current.shelves) ? current.shelves : [];
   const incomingShelves = Array.isArray(incoming.shelves) ? incoming.shelves : [];
   const shelfIds = new Set(currentShelves.map((s) => s.id));
   return {
-    version: DATA_VERSION,
+    version: 3,
     books: [
       ...current.books,
       ...incoming.books.filter((b) => !bookIds.has(b.id)),
@@ -268,12 +317,17 @@ export function mergeData(current: JournalData, incoming: JournalData): JournalD
       ...incoming.quotes.filter((q) => !quoteIds.has(q.id)),
     ],
     shelves: [...currentShelves, ...incomingShelves.filter((s) => !shelfIds.has(s.id))],
+    entries: [
+      ...currentEntries,
+      ...incomingEntries.filter((e) => !entryIds.has(e.id)),
+    ],
   };
 }
 
 /** A new shelf with a stable id and the next sort position. */
 export function makeShelf(name: string, sortOrder: number): Shelf {
-  return { id: makeId('s'), name: name.trim(), sortOrder, createdAt: Date.now() };
+  const now = Date.now();
+  return { id: makeId('s'), name: name.trim(), sortOrder, createdAt: now, updatedAt: now };
 }
 
 export const STORAGE_KEY_FOR_TESTS = STORAGE_KEY;

@@ -146,6 +146,7 @@ export function sampleData() {
       genres: [...seed.genres],
       color: seed.color,
       createdAt: now,
+      updatedAt: now,
     });
     for (const q of seed.quotes ?? []) {
       quotes.push({
@@ -155,6 +156,7 @@ export function sampleData() {
         note: q.note,
         position: q.position,
         createdAt: now,
+        updatedAt: now,
       });
     }
   }
