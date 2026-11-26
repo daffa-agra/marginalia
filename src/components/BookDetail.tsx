@@ -22,11 +22,13 @@ export function BookDetailView({
   store,
   onBack,
   notify,
+  onRead,
 }: {
   bookId: string;
   store: JournalStore;
   onBack: () => void;
   notify: ReturnType<typeof useToasts>['notify'];
+  onRead?: (bookId: string) => void;
 }) {
   const book = store.data.books.find((b) => b.id === bookId);
   const [editing, setEditing] = useState(false);
@@ -163,6 +165,11 @@ export function BookDetailView({
 
           <div className="detail-actions">
             <div className="detail-action-row">
+              {book.file && onRead && (
+                <button type="button" className="btn btn-primary" onClick={() => onRead(book.id)}>
+                  <Icon name="bookOpen" size={14} /> Continue reading
+                </button>
+              )}
               {book.status === 'reading' && (
                 <button type="button" className="btn" onClick={() => setProgressOpen(true)}>
                   Update progress

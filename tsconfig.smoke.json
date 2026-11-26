@@ -8,6 +8,8 @@
     "skipLibCheck": true,
     "jsx": "react-jsx",
     "strict": true,
+    "allowJs": true,
+    "checkJs": false,
     "noEmit": false,
     "outDir": "dist-smoke",
     "rootDir": "src"
