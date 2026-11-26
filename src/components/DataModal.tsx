@@ -6,6 +6,7 @@ import { sanitizeData, mergeData } from '../storage';
 import { exportCsv, exportJson, exportMarkdown, exportQuotesCsv, downloadTextFile } from '../lib/exporters';
 import type { ExportFile } from '../lib/exporters';
 import { Icon } from './icons';
+import { estimateStorage, formatBytes } from '../lib/bookFiles';
 
 export function DataModal({
   store,
@@ -127,34 +128,16 @@ export function DataModal({
   );
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 function StorageRow() {
-  const [quota, setQuota] = useState<{ usage: number; quota: number } | null>(null);
-  const [persisted, setPersisted] = useState<boolean | null>(null);
+  const [quota, setQuota] = useState<{ usage: number; quota: number; persisted: boolean } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    const storage = navigator.storage;
-    if (!storage?.estimate) return;
-    storage
-      .estimate()
+    estimateStorage()
       .then((estimate) => {
-        if (cancelled) return;
-        setQuota({ usage: estimate.usage ?? 0, quota: estimate.quota ?? 0 });
+        if (!cancelled) setQuota(estimate);
       })
       .catch(() => {});
-    if (storage.persisted) {
-      storage
-        .persisted()
-        .then((value) => {
-          if (!cancelled) setPersisted(value);
-        })
-        .catch(() => {});
-    }
     return () => {
       cancelled = true;
     };
@@ -167,7 +150,7 @@ function StorageRow() {
         {formatBytes(quota.usage)} used of {formatBytes(quota.quota)}
       </span>
       <span className="muted">
-        {persisted === false
+        {quota.persisted === false
           ? 'Books may be cleared by the browser when space runs short — exports stay safe.'
           : 'Durable storage granted; books survive space pressure.'}
       </span>

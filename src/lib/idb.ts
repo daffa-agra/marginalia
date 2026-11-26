@@ -46,11 +46,13 @@ export function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains('entries')) {
         db.createObjectStore('entries', { keyPath: 'id' });
       }
+      // files and covers are blob stores keyed by book id out-of-line,
+      // matching lib/bookFiles.ts so both writers share one database.
       if (!db.objectStoreNames.contains('files')) {
-        db.createObjectStore('files', { keyPath: 'id' });
+        db.createObjectStore('files');
       }
       if (!db.objectStoreNames.contains('covers')) {
-        db.createObjectStore('covers', { keyPath: 'id' });
+        db.createObjectStore('covers');
       }
       if (!db.objectStoreNames.contains('outbox')) {
         db.createObjectStore('outbox', { autoIncrement: true });
