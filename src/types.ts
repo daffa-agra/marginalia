@@ -46,6 +46,16 @@ export interface Book {
   series?: string;
   /** Order within the series, 1-based. */
   seriesIndex?: number;
+  /** Publisher, read from the EPUB or filled from a web metadata lookup. */
+  publisher?: string;
+  /** Year the edition was first published. */
+  publishedYear?: number;
+  /** ISBN-13 preferred, ISBN-10 accepted. */
+  isbn?: string;
+  /** URL of the cover image, from a web metadata lookup. */
+  coverUrl?: string;
+  /** Unix ms of the last successful web metadata lookup. */
+  metadataAt?: number;
   status: ReadStatus;
   totalPages?: number;
   currentPage: number;

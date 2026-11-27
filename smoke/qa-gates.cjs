@@ -136,6 +136,7 @@ check('bundle stays under 400 kB gzipped', () => {
 gate('G3', 'Test suites', 'Every node-level suite passes.');
 for (const [name, file] of [
   ['render, parser, storage, exporters', 'smoke/smoke.cjs'],
+  ['metadata lookup: hit shaping, field guards, live API', 'smoke/book-lookup-tests.cjs'],
   ['ZIP, EPUB metadata, shelves', 'smoke/epub-tests.cjs'],
   ['reading plan queue, pace, forecast', 'smoke/plan-tests.cjs'],
   ['reader: opening, TOC, chapters, sanitising', 'smoke/reader-tests.cjs'],

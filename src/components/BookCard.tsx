@@ -28,6 +28,9 @@ export function BookCard({
     <article className={`book-card status-${book.status}`}>
       <div className="book-card-main">
         <span className={`spine status-${book.status}`} aria-hidden="true" />
+        {book.coverUrl ? (
+          <img className="card-cover" src={book.coverUrl} alt="" loading="lazy" />
+        ) : null}
         <div className="book-card-body">
           <button type="button" className="book-link" onClick={onOpen}>
             {book.title}

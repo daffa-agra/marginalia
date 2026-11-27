@@ -10,6 +10,8 @@ import type { EpubMetadata } from '../lib/epub';
 import { extractEpubMetadata } from '../lib/epub';
 import { readEpubFile, saveBookBytes } from '../lib/bookFiles';
 import { uploadBookBytes } from '../lib/api';
+import { MetadataLookup } from './MetadataLookup';
+import type { BookMetadata } from '../lib/bookLookup';
 import { DEFAULT_BOOK_COLOR } from '../lib/colors';
 
 /**
@@ -43,11 +45,36 @@ export function UploadBookModal({
   const [author, setAuthor] = useState('');
   const [totalPages, setTotalPages] = useState('');
   const [shelfId, setShelfId] = useState<string | undefined>(undefined);
+  const [coverUrl, setCoverUrl] = useState('');
+  const [publishedYear, setPublishedYear] = useState('');
+  const [isbn, setIsbn] = useState('');
 
   const shelves = useMemo(
     () => [...store.data.shelves].sort((a, b) => a.sortOrder - b.sortOrder),
     [store.data.shelves],
   );
+
+  /**
+   * Applies a web match to the pending book, filling only empty fields.
+   * The EPUB's own metadata has already had first claim on title and author,
+   * so the lookup here tops up publisher, year, ISBN and cover.
+   */
+  const applyLookup = (m: BookMetadata): string => {
+    const filled: string[] = [];
+    if (!coverUrl.trim() && m.coverUrl) {
+      setCoverUrl(m.coverUrl);
+      filled.push('cover');
+    }
+    if (publishedYear.trim() === '' && m.publishedYear != null) {
+      setPublishedYear(String(m.publishedYear));
+      filled.push('year');
+    }
+    if (!isbn.trim() && m.isbn) {
+      setIsbn(m.isbn);
+      filled.push('ISBN');
+    }
+    return filled.join(', ');
+  };
 
   const handleFile = async (file: File) => {
     setError('');
@@ -73,15 +100,18 @@ export function UploadBookModal({
         setBusy(false);
         return;
       }
-      let coverUrl: string | undefined;
+      let blobUrl: string | undefined;
       if (metadata.cover) {
         const copy = new Uint8Array(metadata.cover.bytes);
         const blob = new Blob([copy.buffer as ArrayBuffer], { type: metadata.cover.mime });
-        coverUrl = URL.createObjectURL(blob);
+        blobUrl = URL.createObjectURL(blob);
       }
-      setPending({ file, metadata, coverUrl });
+      setPending({ file, metadata, coverUrl: blobUrl });
       setTitle(candidateTitle);
       setAuthor(metadata.author ?? '');
+      setCoverUrl('');
+      setPublishedYear('');
+      setIsbn('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not read that EPUB.');
       setPending(null);
@@ -105,8 +135,17 @@ export function UploadBookModal({
         genres: [],
         color: DEFAULT_BOOK_COLOR,
         shelfId,
+        coverUrl: coverUrl.trim() || undefined,
+        publishedYear: publishedYear ? Number.parseInt(publishedYear, 10) || undefined : undefined,
+        isbn: isbn.trim() || undefined,
         file: { kind: 'epub', fileName: pending.file.name, size, storage: 'local' },
       });
+      // The EPUB's own metadata block may know the publisher even before any
+      // web lookup; it is the more authoritative source, so it is taken as-is.
+      const epubPublisher = pending.metadata.publisher?.trim();
+      if (epubPublisher) {
+        store.updateBook(book.id, { publisher: epubPublisher });
+      }
       // Bytes are stored under the book id so a duplicate title cannot collide.
       const bytes = await readEpubFile(pending.file);
       await saveBookBytes(book.id, bytes);
@@ -167,6 +206,9 @@ export function UploadBookModal({
       genres: [],
       color: DEFAULT_BOOK_COLOR,
       shelfId,
+      coverUrl: coverUrl.trim() || undefined,
+      publishedYear: publishedYear ? Number.parseInt(publishedYear, 10) || undefined : undefined,
+      isbn: isbn.trim() || undefined,
     });
     notify(`Added “${book.title}”`);
     onSaved(book.id);
@@ -249,6 +291,48 @@ export function UploadBookModal({
                 />
               </div>
             </div>
+
+            <MetadataLookup
+              queryTitle={title}
+              queryAuthor={author}
+              onApply={applyLookup}
+            />
+
+            <div className="field-row">
+              <div className="field field-small">
+                <label htmlFor="up-year">Published</label>
+                <input
+                  id="up-year"
+                  className="input numeric"
+                  type="number"
+                  min={1450}
+                  max={new Date().getFullYear() + 1}
+                  value={publishedYear}
+                  onChange={(e) => setPublishedYear(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="up-isbn">ISBN</label>
+                <input
+                  id="up-isbn"
+                  className="input"
+                  value={isbn}
+                  onChange={(e) => setIsbn(e.target.value)}
+                  placeholder="978…"
+                />
+              </div>
+            </div>
+            <div className="field">
+              <label htmlFor="up-cover">Cover URL</label>
+              <input
+                id="up-cover"
+                className="input"
+                value={coverUrl}
+                onChange={(e) => setCoverUrl(e.target.value)}
+                placeholder="https://covers.openlibrary.org/…"
+              />
+            </div>
+
             <div className="field">
               <span className="field-label">Shelf</span>
               <ShelfPicker shelves={shelves} value={shelfId} onChange={setShelfId} />
@@ -348,6 +432,48 @@ export function UploadBookModal({
               />
             </div>
           </div>
+
+          <MetadataLookup
+            queryTitle={title}
+            queryAuthor={author}
+            onApply={applyLookup}
+          />
+
+          <div className="field-row">
+            <div className="field field-small">
+              <label htmlFor="mb-year">Published</label>
+              <input
+                id="mb-year"
+                className="input numeric"
+                type="number"
+                min={1450}
+                max={new Date().getFullYear() + 1}
+                value={publishedYear}
+                onChange={(e) => setPublishedYear(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="mb-isbn">ISBN</label>
+              <input
+                id="mb-isbn"
+                className="input"
+                value={isbn}
+                onChange={(e) => setIsbn(e.target.value)}
+                placeholder="978…"
+              />
+            </div>
+          </div>
+          <div className="field">
+            <label htmlFor="mb-cover">Cover URL</label>
+            <input
+              id="mb-cover"
+              className="input"
+              value={coverUrl}
+              onChange={(e) => setCoverUrl(e.target.value)}
+              placeholder="https://covers.openlibrary.org/…"
+            />
+          </div>
+
           <div className="field">
             <span className="field-label">Shelf</span>
             <ShelfPicker shelves={shelves} value={shelfId} onChange={setShelfId} />

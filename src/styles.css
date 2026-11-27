@@ -940,6 +940,88 @@ a {
   color: var(--ink-3);
 }
 
+/* ── Web metadata lookup ──
+   A small, quiet affordance: one ghost button, its result line, and a
+   pick-list only when the Open Library returns more than one hit. */
+.lookup {
+  margin: var(--s-1) 0;
+}
+
+.lookup-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+.lookup-hint {
+  font-size: 0.82rem;
+  color: var(--ink-3);
+}
+
+.lookup-results {
+  list-style: none;
+  margin: var(--s-2) 0 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  overflow: hidden;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.lookup-option {
+  display: flex;
+  width: 100%;
+  gap: var(--s-3);
+  align-items: center;
+  padding: var(--s-2) var(--s-3);
+  background: var(--surface);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+  transition: background var(--t-fast) var(--ease);
+}
+
+.lookup-option:last-child {
+  border-bottom: 0;
+}
+
+.lookup-option:hover {
+  background: var(--surface-2);
+}
+
+.lookup-thumb {
+  width: 32px;
+  height: 46px;
+  object-fit: cover;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.lookup-thumb-empty {
+  display: inline-block;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+}
+
+.lookup-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lookup-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .file-facts {
   min-width: 0;
 }
@@ -2414,6 +2496,22 @@ mark.reader-highlight:hover {
   inset: 10px auto 10px 12px;
   width: 1px;
   background: rgb(255 255 255 / 0.28);
+}
+
+/* A real cover image takes the same box as the rendered spine object. */
+.book-cover-image {
+  object-fit: cover;
+  background: var(--surface-3);
+}
+
+/* Small cover thumbnail on a library card. */
+.card-cover {
+  width: 44px;
+  height: 66px;
+  object-fit: cover;
+  border-radius: var(--radius-xs);
+  box-shadow: var(--shadow-1);
+  flex-shrink: 0;
 }
 
 .cover-title {

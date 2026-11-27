@@ -9,12 +9,18 @@ import { InlineAlert } from './EmptyState';
 import { Icon } from './icons';
 import { parseNonNegativeInt, todayIso } from '../lib/utils';
 import { SHELF_COLORS } from '../lib/colors';
+import { MetadataLookup } from './MetadataLookup';
+import type { BookMetadata } from '../lib/bookLookup';
 
 export interface BookFormValues {
   title: string;
   author: string;
   series: string;
   seriesIndex: string;
+  publisher: string;
+  publishedYear: string;
+  isbn: string;
+  coverUrl: string;
   status: ReadStatus;
   totalPages: string;
   currentPage: string;
@@ -32,6 +38,10 @@ export function emptyFormValues(): BookFormValues {
     author: '',
     series: '',
     seriesIndex: '',
+    publisher: '',
+    publishedYear: '',
+    isbn: '',
+    coverUrl: '',
     status: 'want-to-read',
     totalPages: '',
     currentPage: '0',
@@ -50,6 +60,10 @@ export function formValuesFromBook(book: Book): BookFormValues {
     author: book.author,
     series: book.series ?? '',
     seriesIndex: book.seriesIndex != null ? String(book.seriesIndex) : '',
+    publisher: book.publisher ?? '',
+    publishedYear: book.publishedYear != null ? String(book.publishedYear) : '',
+    isbn: book.isbn ?? '',
+    coverUrl: book.coverUrl ?? '',
     status: book.status,
     totalPages: book.totalPages != null ? String(book.totalPages) : '',
     currentPage: String(book.currentPage),
@@ -65,11 +79,16 @@ export function formValuesFromBook(book: Book): BookFormValues {
 function valuesToPatch(values: BookFormValues): Omit<Book, 'id' | 'createdAt'> {
   const totalPages = parseNonNegativeInt(values.totalPages);
   const currentPage = parseNonNegativeInt(values.currentPage) ?? 0;
+  const publishedYear = parseNonNegativeInt(values.publishedYear);
   return {
     title: values.title.trim(),
     author: values.author.trim() || 'Unknown author',
     series: values.series.trim() || undefined,
     seriesIndex: values.seriesIndex.trim() === '' ? undefined : parseNonNegativeInt(values.seriesIndex),
+    publisher: values.publisher.trim() || undefined,
+    publishedYear: publishedYear ?? undefined,
+    isbn: values.isbn.trim() || undefined,
+    coverUrl: values.coverUrl.trim() || undefined,
     status: values.status,
     totalPages,
     currentPage: totalPages ? Math.min(currentPage, totalPages) : currentPage,
@@ -105,6 +124,42 @@ export function BookFormModal({
 
   const set = <K extends keyof BookFormValues>(key: K, value: BookFormValues[K]) =>
     setValues((v) => ({ ...v, [key]: value }));
+
+  /**
+   * Applies a web match. Only EMPTY fields are filled — the reader's own
+   * edits always win over a lookup, and the return value names exactly what
+   * changed so the summary under the button is honest.
+   */
+  const applyMetadata = (m: BookMetadata): string => {
+    const filled: string[] = [];
+    const next: BookFormValues = { ...values };
+    if (!values.title.trim() && m.title) {
+      next.title = m.title;
+      filled.push('title');
+    }
+    if (!values.author.trim() && m.author) {
+      next.author = m.author;
+      filled.push('author');
+    }
+    if (!values.publisher.trim() && m.publisher) {
+      next.publisher = m.publisher;
+      filled.push('publisher');
+    }
+    if (values.publishedYear.trim() === '' && m.publishedYear != null) {
+      next.publishedYear = String(m.publishedYear);
+      filled.push('year');
+    }
+    if (!values.isbn.trim() && m.isbn) {
+      next.isbn = m.isbn;
+      filled.push('ISBN');
+    }
+    if (!values.coverUrl.trim() && m.coverUrl) {
+      next.coverUrl = m.coverUrl;
+      filled.push('cover');
+    }
+    if (filled.length > 0) setValues(next);
+    return filled.join(', ');
+  };
 
   // Prefill author/color from the most recent book on a fresh add.
   const lastBook = store.data.books[0];
@@ -187,6 +242,47 @@ export function BookFormModal({
           </div>
         </div>
 
+        <MetadataLookup
+          queryTitle={values.title}
+          queryAuthor={values.author}
+          onApply={applyMetadata}
+        />
+
+        <div className="field-row">
+          <div className="field">
+            <label htmlFor="bf-publisher">Publisher</label>
+            <input
+              id="bf-publisher"
+              className="input"
+              value={values.publisher}
+              onChange={(e) => set('publisher', e.target.value)}
+              placeholder="Penguin Books"
+            />
+          </div>
+          <div className="field field-small">
+            <label htmlFor="bf-year">Published</label>
+            <input
+              id="bf-year"
+              className="input numeric"
+              type="number"
+              min={1450}
+              max={new Date().getFullYear() + 1}
+              value={values.publishedYear}
+              onChange={(e) => set('publishedYear', e.target.value)}
+            />
+          </div>
+          <div className="field field-small">
+            <label htmlFor="bf-isbn">ISBN</label>
+            <input
+              id="bf-isbn"
+              className="input"
+              value={values.isbn}
+              onChange={(e) => set('isbn', e.target.value)}
+              placeholder="978…"
+            />
+          </div>
+        </div>
+
         <div className="field-row">
           <div className="field">
             <label htmlFor="bf-series">Series</label>
@@ -207,6 +303,16 @@ export function BookFormModal({
               min={1}
               value={values.seriesIndex}
               onChange={(e) => set('seriesIndex', e.target.value)}
+            />
+          </div>
+          <div className="field field-small">
+            <label htmlFor="bf-cover">Cover URL</label>
+            <input
+              id="bf-cover"
+              className="input"
+              value={values.coverUrl}
+              onChange={(e) => set('coverUrl', e.target.value)}
+              placeholder="https://covers.openlibrary.org/…"
             />
           </div>
         </div>

@@ -191,6 +191,11 @@ function pickBook(b: unknown): Book | null {
     author: str(raw.author) ?? 'Unknown author',
     series: str(raw.series),
     seriesIndex: num(raw.seriesIndex),
+    publisher: str(raw.publisher),
+    publishedYear: pickYear(raw.publishedYear),
+    isbn: pickIsbn(raw.isbn),
+    coverUrl: pickCoverUrl(raw.coverUrl),
+    metadataAt: num(raw.metadataAt),
     status,
     totalPages: num(raw.totalPages),
     currentPage: Math.max(0, num(raw.currentPage) ?? 0),
@@ -206,6 +211,45 @@ function pickBook(b: unknown): Book | null {
     file: pickEpubFile(raw.file),
     createdAt: num(raw.createdAt) ?? Date.now(),
   };
+}
+
+/** A plausible publication year; anything else is dropped, not clamped. */
+function pickYear(v: unknown): number | undefined {
+  const y = num(v);
+  const thisYear = new Date().getFullYear() + 1;
+  return y != null && y >= 1450 && y <= thisYear ? Math.round(y) : undefined;
+}
+
+/** An ISBN-10 or ISBN-13, hyphens and spaces stripped, shape-checked. */
+function pickIsbn(v: unknown): string | undefined {
+  const s = str(v);
+  if (!s || s.length > 17) return undefined;
+  const digits = s.replace(/[-\s]/g, '');
+  return /^97[89]\d{10}$/.test(digits) || /^\d{9}[\dXx]$/.test(digits)
+    ? digits.toUpperCase()
+    : undefined;
+}
+
+/**
+ * A cover image URL. HTTPS only — the app is served over TLS, so an http
+ * cover would be mixed content and blocked anyway, and an allow-list of
+ * hosts keeps a crafted URL from turning the journal into a tracker.
+ */
+function pickCoverUrl(v: unknown): string | undefined {
+  const s = str(v);
+  if (!s || s.length > 500) return undefined;
+  try {
+    const url = new URL(s);
+    return (
+      url.protocol === 'https:' &&
+      /(^|\.)openlibrary\.org$/.test(url.hostname) &&
+      /^\/b\//.test(url.pathname)
+    )
+      ? s
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Restores a stored reading position, dropping anything malformed. */

@@ -65,10 +65,24 @@ export function BookDetailView({
       </button>
 
       <div className="book-detail-hero">
-        <div className="book-cover" style={{ backgroundColor: book.color }} aria-hidden="true">
-          <span className="cover-title">{book.title}</span>
-          <span className="cover-author">{book.author}</span>
-        </div>
+        {book.coverUrl ? (
+          <img
+            className="book-cover book-cover-image"
+            src={book.coverUrl}
+            alt=""
+            loading="lazy"
+            onError={(e) => {
+              // A dead cover URL must not leave a broken-image icon where the
+              // colored spine should be; the color block is the fallback.
+              (e.currentTarget as HTMLImageElement).style.display = 'none';
+            }}
+          />
+        ) : (
+          <div className="book-cover" style={{ backgroundColor: book.color }} aria-hidden="true">
+            <span className="cover-title">{book.title}</span>
+            <span className="cover-author">{book.author}</span>
+          </div>
+        )}
         <div className="book-detail-info">
           <div className="book-detail-kicker">
             <StatusMenu
@@ -155,6 +169,24 @@ export function BookDetailView({
           ) : null}
 
           <dl className="date-facts">
+            {book.publisher && (
+              <div>
+                <dt>Publisher</dt>
+                <dd>{book.publisher}</dd>
+              </div>
+            )}
+            {book.publishedYear ? (
+              <div>
+                <dt>Published</dt>
+                <dd className="numeric">{book.publishedYear}</dd>
+              </div>
+            ) : null}
+            {book.isbn && (
+              <div>
+                <dt>ISBN</dt>
+                <dd className="numeric">{book.isbn}</dd>
+              </div>
+            )}
             {book.startedAt && (
               <div>
                 <dt>Started</dt>

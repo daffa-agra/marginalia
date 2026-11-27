@@ -131,6 +131,13 @@ const PATHS = {
       <path d="M2.75 4.75h10.5M2.75 8h10.5M2.75 11.25h10.5" />
     </>
   ),
+  /* A closed book, front cover facing: spine left, page block right. */
+  book: (
+    <>
+      <rect x="3.25" y="2.75" width="9.5" height="10.5" rx="1" />
+      <path d="M5.75 2.75v10.5" />
+    </>
+  ),
 } as const;
 
 export type IconName = keyof typeof PATHS;
