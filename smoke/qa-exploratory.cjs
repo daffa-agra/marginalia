@@ -1,7 +1,16 @@
 /* Exploratory QA: probe for problems the gate suite does not cover.
  * Each probe is a hostile or unusual user action, reported as finding or clean.
  */
-const playwright = require('C:/Users/PAB-EDU-NB4282/AppData/Local/npm-cache/_npx/41b79885fbdb2a18/node_modules/playwright');
+function loadPlaywright() {
+  try {
+    return require('playwright');
+  } catch {
+    // The author's machine resolves it from a global npx cache instead of a
+    // project dependency; keep working there.
+    return require('C:/Users/PAB-EDU-NB4282/AppData/Local/npm-cache/_npx/41b79885fbdb2a18/node_modules/playwright');
+  }
+}
+const playwright = loadPlaywright();
 const path = require('path');
 
 const BASE = 'http://127.0.0.1:4173/';
@@ -30,7 +39,11 @@ async function seed(page, data) {
 }
 
 (async () => {
-  const browser = await playwright.chromium.launch({ channel: 'chrome' });
+  // Prefer the system Chrome when there is one; fall back to the bundled
+  // chromium so the suite runs anywhere.
+  const browser = await playwright.chromium.launch({ channel: 'chrome' }).catch(() =>
+    playwright.chromium.launch(),
+  );
 
   /* ── 1. Duplicate shelf names ── */
   {
