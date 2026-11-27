@@ -78,13 +78,14 @@ const sync = require(path.join(OUT, 'sync.js'));
 
 /*
  * `r2.ts` imports `aws4fetch`, which resolves from worker/node_modules. The
- * compiled output sits outside that tree, so a link makes the require resolve
- * without a second install. Signing itself runs locally: no network, no secrets.
+ * compiled output sits outside that tree, so the package is copied next to the
+ * compiled module. A symlink was tried first and had to go: creating one on
+ * Windows needs admin rights or Developer Mode, and the QA gates must not
+ * depend on either. Signing itself runs locally: no network, no secrets.
  */
-const linkDir = path.join(OUT, 'node_modules');
-fs.mkdirSync(linkDir, { recursive: true });
-fs.rmSync(path.join(linkDir, 'aws4fetch'), { force: true, recursive: true });
-fs.symlinkSync(path.join(WORKER, 'node_modules', 'aws4fetch'), path.join(linkDir, 'aws4fetch'), 'dir');
+const linkDir = path.join(OUT, 'node_modules', 'aws4fetch');
+fs.rmSync(linkDir, { force: true, recursive: true });
+fs.cpSync(path.join(WORKER, 'node_modules', 'aws4fetch'), linkDir, { recursive: true });
 
 const r2 = require(path.join(OUT, 'r2.js'));
 
