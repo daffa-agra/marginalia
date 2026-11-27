@@ -4,7 +4,8 @@ import type { JournalStore } from '../useJournal';
 import { Icon } from '../components/icons';
 import { ReaderSettingsPanel } from '../components/ReaderSettingsPanel';
 import { MarginComposer, SelectionToolbar } from '../components/MarginComposer';
-import { loadBookBytes } from '../lib/bookFiles';
+import { loadBookBytes, saveBookBytes } from '../lib/bookFiles';
+import { downloadBookBytes } from '../lib/api';
 import { chapterHtml, closeBook, openBook, resolvePath } from '../lib/epubBook';
 import type { ParsedBook } from '../lib/epubBook';
 import {
@@ -132,10 +133,22 @@ export function ReaderView({
       setLoading(true);
       setError('');
       try {
-        const blob = await loadBookBytes(book.id);
+        let blob = await loadBookBytes(book.id);
+        if (!blob && book.file?.sha256) {
+          // Not cached here but synced: pull the cloud copy once and keep it.
+          const fetched = await downloadBookBytes(book.id, book.file.sha256);
+          if (fetched.ok) {
+            await saveBookBytes(book.id, fetched.data);
+            blob = await loadBookBytes(book.id);
+          }
+        }
         if (!blob) {
           if (!cancelled) {
-            setError('This book has no file attached. Add an EPUB from the book page.');
+            setError(
+              book.file
+                ? 'The file is not in this browser and the cloud copy could not be fetched. Try again from somewhere online.'
+                : 'This book has no file attached. Add an EPUB from the book page.',
+            );
             setLoading(false);
           }
           return;

@@ -32,6 +32,10 @@ export interface EpubFile {
   size: number;
   /** Where the bytes live right now. */
   storage: 'local';
+  /** SHA-256 of the bytes once they have been uploaded to the library bucket. */
+  sha256?: string;
+  /** Unix ms of the successful upload. */
+  uploadedAt?: number;
 }
 
 export interface Book {

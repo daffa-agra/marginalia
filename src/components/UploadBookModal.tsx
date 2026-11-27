@@ -9,6 +9,7 @@ import { looksLikeEpub } from '../lib/epub';
 import type { EpubMetadata } from '../lib/epub';
 import { extractEpubMetadata } from '../lib/epub';
 import { readEpubFile, saveBookBytes } from '../lib/bookFiles';
+import { uploadBookBytes } from '../lib/api';
 import { DEFAULT_BOOK_COLOR } from '../lib/colors';
 
 /**
@@ -111,6 +112,22 @@ export function UploadBookModal({
       await saveBookBytes(book.id, bytes);
       notify(`Added “${book.title}”`);
       onSaved(book.id);
+      // The library copy is a background favour, never the add's critical path:
+      // offline it simply does not happen yet, and the book stays fully readable.
+      void uploadBookBytes(book.id, bytes).then((result) => {
+        if (!result.ok) return;
+        if (!store.data.books.some((b) => b.id === book.id)) return;
+        store.updateBook(book.id, {
+          file: {
+            kind: 'epub',
+            fileName: pending.file.name,
+            size,
+            storage: 'local',
+            sha256: result.data.sha256,
+            uploadedAt: Date.now(),
+          },
+        });
+      }).catch(() => undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save that book.');
     } finally {

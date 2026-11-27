@@ -228,7 +228,18 @@ function pickEpubFile(value: unknown): Book['file'] {
   const fileName = str(raw.fileName);
   const size = num(raw.size);
   if (!fileName || size == null || size < 0) return undefined;
-  return { kind: 'epub', fileName, size, storage: 'local' };
+  const sha256 = typeof raw.sha256 === 'string' && /^[a-f0-9]{64}$/i.test(raw.sha256)
+    ? raw.sha256.toLowerCase()
+    : undefined;
+  const uploadedAt = num(raw.uploadedAt);
+  return {
+    kind: 'epub',
+    fileName,
+    size,
+    storage: 'local',
+    sha256,
+    ...(uploadedAt != null && sha256 ? { uploadedAt } : {}),
+  };
 }
 
 function pickShelf(s: unknown): Shelf | null {
