@@ -96,8 +96,10 @@ async function resolveJournal(request: Request, env: Env, create: boolean): Prom
 
 /* ── validation helpers ── */
 
-function badRequest(error: string): Response {
-  return json({ error }, 400);
+function badRequest(error: string, request: Request, env: Env): Response {
+  // Errors carry CORS too: a browser that cannot read the body reports a
+  // generic network failure, and the reader deserves the real reason.
+  return json({ error }, 400, corsHeaders(request, env));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -120,10 +122,11 @@ function r2Config(env: Env): { accountId: string; accessKeyId: string; secretAcc
   return isConfigured(config) ? config : null;
 }
 
-function storageNotConfigured(): Response {
+function storageNotConfigured(request: Request, env: Env): Response {
   return json(
     { error: 'File storage is not configured on this server yet. Reading and syncing still work.' },
     503,
+    corsHeaders(request, env),
   );
 }
 
@@ -142,8 +145,11 @@ function pickRecords(value: unknown): Record<string, unknown>[] {
 
 async function handleHello(request: Request, env: Env): Promise<Response> {
   const journal = await resolveJournal(request, env, true);
-  if (!journal) return unauthorised();
-  return json({ journalId: journal.id, revision: journal.revision });
+  // CORS must ride on every JSON response, not only /api/sync's: a browser
+  // that cannot read the response treats the request as failed, so /api/hello
+  // without the header made registration "offline" from the app's point of view.
+  if (!journal) return unauthorised(corsHeaders(request, env));
+  return json({ journalId: journal.id, revision: journal.revision }, 200, corsHeaders(request, env));
 }
 
 async function handleSync(request: Request, env: Env, cors: Record<string, string>): Promise<Response> {
@@ -152,24 +158,24 @@ async function handleSync(request: Request, env: Env, cors: Record<string, strin
   // to refuse, which is exactly the CPU/memory budget this endpoint must respect.
   const declared = Number(request.headers.get('Content-Length') ?? '0');
   if (Number.isFinite(declared) && declared > MAX_SYNC_BODY) {
-    return badRequest(`Sync body is limited to ${Math.round(MAX_SYNC_BODY / 1024)} kB`);
+    return badRequest(`Sync body is limited to ${Math.round(MAX_SYNC_BODY / 1024)} kB`, request, env);
   }
 
   const journal = await resolveJournal(request, env, false);
-  if (!journal) return unauthorised();
+  if (!journal) return unauthorised(corsHeaders(request, env));
 
   const text = await request.text();
   if (text.length > MAX_SYNC_BODY) {
-    return badRequest(`Sync body is limited to ${Math.round(MAX_SYNC_BODY / 1024)} kB`);
+    return badRequest(`Sync body is limited to ${Math.round(MAX_SYNC_BODY / 1024)} kB`, request, env);
   }
 
   let body: unknown;
   try {
     body = JSON.parse(text);
   } catch {
-    return badRequest('Body is not valid JSON');
+    return badRequest('Body is not valid JSON', request, env);
   }
-  if (!isRecord(body)) return badRequest('Body must be an object');
+  if (!isRecord(body)) return badRequest('Body must be an object', request, env);
 
   const since = typeof body.since === 'number' && Number.isFinite(body.since) ? body.since : 0;
   const changes = isRecord(body.changes) ? body.changes : {};
@@ -309,27 +315,30 @@ async function handleSync(request: Request, env: Env, cors: Record<string, strin
 }
 
 async function handleUploadUrl(request: Request, env: Env): Promise<Response> {
-  const journal = await resolveJournal(request, env, false);
-  if (!journal) return unauthorised();
+  // Create-on-first-contact, like /api/hello: a brand-new browser's first book
+  // must not depend on a sync having run first. The capability key is the
+  // account, so a well-formed key is enough to name (and create) the journal.
+  const journal = await resolveJournal(request, env, true);
+  if (!journal) return unauthorised(corsHeaders(request, env));
 
   let body: unknown;
   try {
     body = await request.json();
   } catch {
-    return badRequest('Body is not valid JSON');
+    return badRequest('Body is not valid JSON', request, env);
   }
-  if (!isRecord(body)) return badRequest('Body must be an object');
+  if (!isRecord(body)) return badRequest('Body must be an object', request, env);
 
   const bookId = typeof body.bookId === 'string' ? body.bookId : '';
   const sha256 = typeof body.sha256 === 'string' ? body.sha256 : '';
   const size = typeof body.size === 'number' ? body.size : 0;
 
-  if (!bookId) return badRequest('bookId is required');
-  if (!/^[a-f0-9]{64}$/i.test(sha256)) return badRequest('sha256 must be 64 hex characters');
-  if (!Number.isFinite(size) || size <= 0) return badRequest('size must be a positive number');
+  if (!bookId) return badRequest('bookId is required', request, env);
+  if (!/^[a-f0-9]{64}$/i.test(sha256)) return badRequest('sha256 must be 64 hex characters', request, env);
+  if (!Number.isFinite(size) || size <= 0) return badRequest('size must be a positive number', request, env);
 
   const config = r2Config(env);
-  if (!config) return storageNotConfigured();
+  if (!config) return storageNotConfigured(request, env);
 
   // ── keep this inside the free tier ──
   //
@@ -340,7 +349,7 @@ async function handleUploadUrl(request: Request, env: Env): Promise<Response> {
   const usage = await readUsage(env, journal.id);
   const quota = checkQuota({ size, journalBytes: usage.journalBytes, totalBytes: usage.totalBytes });
   if (!quota.allowed) {
-    return json({ error: quota.reason, retryable: quota.retryable ?? false }, 413);
+    return json({ error: quota.reason, retryable: quota.retryable ?? false }, 413, corsHeaders(request, env));
   }
 
   // A re-upload of the same book costs no new bytes: one object, keyed by hash.
@@ -352,14 +361,14 @@ async function handleUploadUrl(request: Request, env: Env): Promise<Response> {
   if (existing && existing.sha256 === sha256.toLowerCase()) {
     const key = objectKey(journal.id, bookId, sha256);
     const signed = await presign(config, key, 'PUT', size);
-    return json({ url: signed.url, expiresIn: signed.expiresIn, deduplicated: true });
+    return json({ url: signed.url, expiresIn: signed.expiresIn, deduplicated: true }, 200, corsHeaders(request, env));
   }
 
   // Rate limit last, so a refused-by-quota request does not consume the budget.
   const rate = await readSigningRate(env, journal.id);
   const allowed = checkRate(rate);
   if (!allowed.allowed) {
-    return json({ error: allowed.reason, retryable: allowed.retryable ?? true }, 429);
+    return json({ error: allowed.reason, retryable: allowed.retryable ?? true }, 429, corsHeaders(request, env));
   }
   await recordSigning(env, journal.id, rate);
 
@@ -383,7 +392,7 @@ async function handleUploadUrl(request: Request, env: Env): Promise<Response> {
     ).bind(journal.id, journal.id),
   ]);
 
-  return json({ url: signed.url, expiresIn: signed.expiresIn });
+  return json({ url: signed.url, expiresIn: signed.expiresIn }, 200, corsHeaders(request, env));
 }
 
 /** How many bytes this journal and the whole deployment are storing. */
@@ -431,24 +440,27 @@ async function recordSigning(
 }
 
 async function handleReadUrl(request: Request, env: Env): Promise<Response> {
-  const journal = await resolveJournal(request, env, false);
-  if (!journal) return unauthorised();
+  // Create-on-first-contact, matching upload-url: otherwise a device that added
+  // a book but never synced could not even be refused honestly — it would get
+  // a 401 that reads like "bad key" when the truth is "no journal yet".
+  const journal = await resolveJournal(request, env, true);
+  if (!journal) return unauthorised(corsHeaders(request, env));
 
   let body: unknown;
   try {
     body = await request.json();
   } catch {
-    return badRequest('Body is not valid JSON');
+    return badRequest('Body is not valid JSON', request, env);
   }
-  if (!isRecord(body)) return badRequest('Body must be an object');
+  if (!isRecord(body)) return badRequest('Body must be an object', request, env);
 
   const bookId = typeof body.bookId === 'string' ? body.bookId : '';
   const sha256 = typeof body.sha256 === 'string' ? body.sha256 : '';
-  if (!bookId) return badRequest('bookId is required');
-  if (!/^[a-f0-9]{64}$/i.test(sha256)) return badRequest('sha256 must be 64 hex characters');
+  if (!bookId) return badRequest('bookId is required', request, env);
+  if (!/^[a-f0-9]{64}$/i.test(sha256)) return badRequest('sha256 must be 64 hex characters', request, env);
 
   const config = r2Config(env);
-  if (!config) return storageNotConfigured();
+  if (!config) return storageNotConfigured(request, env);
 
   // Sign a read only when the ledger says the object should exist. Without this
   // check any capability holder can mint read URLs for keys it can guess (the key
@@ -461,7 +473,7 @@ async function handleReadUrl(request: Request, env: Env): Promise<Response> {
     .bind(journal.id, bookId)
     .first<{ sha256: string }>();
   if (!ledgered || ledgered.sha256 !== sha256.toLowerCase()) {
-    return json({ error: 'No stored file matches this book.' }, 404);
+    return json({ error: 'No stored file matches this book.' }, 404, corsHeaders(request, env));
   }
 
   // Reads share the upload signing budget: every signature is a Worker
@@ -470,13 +482,13 @@ async function handleReadUrl(request: Request, env: Env): Promise<Response> {
   const rate = await readSigningRate(env, journal.id);
   const allowed = checkRate(rate);
   if (!allowed.allowed) {
-    return json({ error: allowed.reason, retryable: allowed.retryable ?? true }, 429);
+    return json({ error: allowed.reason, retryable: allowed.retryable ?? true }, 429, corsHeaders(request, env));
   }
   await recordSigning(env, journal.id, rate);
 
   const key = objectKey(journal.id, bookId, sha256);
   const signed = await presign(config, key, 'GET');
-  return json({ url: signed.url, expiresIn: signed.expiresIn });
+  return json({ url: signed.url, expiresIn: signed.expiresIn }, 200, corsHeaders(request, env));
 }
 
 /* ── entry point ── */

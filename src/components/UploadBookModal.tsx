@@ -114,9 +114,21 @@ export function UploadBookModal({
       onSaved(book.id);
       // The library copy is a background favour, never the add's critical path:
       // offline it simply does not happen yet, and the book stays fully readable.
+      // But a failed copy must not be silent — the reader would believe the book
+      // is backed up when it is not — so the failure is announced.
       void uploadBookBytes(book.id, bytes).then((result) => {
-        if (!result.ok) return;
-        if (!store.data.books.some((b) => b.id === book.id)) return;
+        if (!result.ok) {
+          notify('The book was added, but its cloud copy failed. It stays readable on this device.', {
+            tone: 'danger',
+            duration: 8000,
+          });
+          return;
+        }
+        // No "still exists" guard here on purpose: `store.data` in this closure
+        // is the render-time snapshot, which predates addBook, so the book is
+        // never in it and the guard always fired — the upload's sha256 never
+        // reached the record, and with it the cross-device read path. updateBook
+        // itself maps over current state and no-ops if the book is gone.
         store.updateBook(book.id, {
           file: {
             kind: 'epub',
@@ -127,7 +139,12 @@ export function UploadBookModal({
             uploadedAt: Date.now(),
           },
         });
-      }).catch(() => undefined);
+      }).catch(() => {
+        notify('The book was added, but its cloud copy failed. It stays readable on this device.', {
+          tone: 'danger',
+          duration: 8000,
+        });
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save that book.');
     } finally {

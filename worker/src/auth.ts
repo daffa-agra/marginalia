@@ -40,8 +40,14 @@ export function looksLikeKey(value: string | null | undefined): value is string 
   return typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
 }
 
-export function unauthorised(message = 'Missing or invalid journal key'): Response {
-  return json({ error: message }, 401);
+/**
+ * A 401 with the standard message.
+ *
+ * CORS headers ride on this too: a browser that cannot read the body shows a
+ * generic network error, when the actual answer is "this key is not valid".
+ */
+export function unauthorised(extraHeaders: Record<string, string> = {}, message = 'Missing or invalid journal key'): Response {
+  return json({ error: message }, 401, extraHeaders);
 }
 
 /** JSON response helper. Every response in this Worker goes through it. */

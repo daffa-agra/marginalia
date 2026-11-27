@@ -29,7 +29,7 @@ function check(name, fn) {
   }
 }
 
-/** POSTs JSON to the API. Resolves to {status, body} or {error}. */
+/** POSTs JSON to the API. Resolves to {status, body, headers} or {error}. */
 function call(path, body, key, method = 'POST') {
   return new Promise((resolve) => {
     const payload = body === undefined ? '' : JSON.stringify(body);
@@ -53,7 +53,7 @@ function call(path, body, key, method = 'POST') {
         } catch {
           parsed = text;
         }
-        resolve({ status: res.statusCode, body: parsed });
+        resolve({ status: res.statusCode, body: parsed, headers: res.headers });
       });
     });
     req.on('timeout', () => {
@@ -335,6 +335,23 @@ function newKey() {
   });
   check('CORS allows the journal key header', () => {
     assert.match(preflight.headers['access-control-allow-headers'] ?? '', /X-Journal-Key/i);
+  });
+
+  // The preflight passing is not enough: a POST response without the
+  // Access-Control-Allow-Origin header is unreadable to the browser, which
+  // then treats the whole request as failed. Exactly this made "add a book"
+  // silently skip the R2 upload while the Worker had already signed, rated
+  // and ledgered it. Every JSON response must carry the header.
+  const corsGet = await call('/api/hello', {}, key);
+  const corsUpload = await call('/api/files/upload-url', { bookId: 'b-test', sha256: sha, size: 1024 }, key);
+  const corsDenied = await call('/api/hello', {}, 'short');
+  check('actual responses carry the CORS header, not just preflights', () => {
+    for (const [name, res] of [['hello 200', corsGet], ['upload-url 200', corsUpload], ['hello 401', corsDenied]]) {
+      assert.ok(
+        res.headers?.['access-control-allow-origin'],
+        `${name} response has no Access-Control-Allow-Origin`,
+      );
+    }
   });
 
   /* ── an unauthenticated write cannot wipe a journal ── */
