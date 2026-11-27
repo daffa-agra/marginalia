@@ -93,6 +93,7 @@ node smoke/reader-ui-tests.cjs         # reading an EPUB in a real browser
 node smoke/reader-pagination-tests.cjs # pagination and customization in a browser
 node smoke/reader-behaviour-tests.cjs  # page geometry, reflow anchoring, tap zones, links
 node smoke/byte-lifecycle.cjs         # book bytes survive undo, clear on expiry
+node smoke/local-first-tests.cjs      # the cloud off: position, notes and highlights survive on local bytes alone
 node smoke/dev-server-check.cjs       # the dev server serves the app
 ```
 
