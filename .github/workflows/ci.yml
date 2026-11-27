@@ -24,6 +24,12 @@ jobs:
       - name: Install
         run: npm install --no-audit --no-fund
 
+      # The worker is its own package; the QA gates compile its signing module,
+      # which depends on aws4fetch.
+      - name: Install worker dependencies
+        working-directory: worker
+        run: npm install --no-audit --no-fund
+
       - name: Quality gates
         run: npm run qa
 
