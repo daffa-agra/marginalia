@@ -11,7 +11,7 @@
  * the bucket or read a different book.
  */
 
-import { AwsClient } from 'aws4fetch';
+import { AwsClient, AwsV4Signer } from 'aws4fetch';
 
 /** Five minutes: long enough for a slow connection, short enough to be useless later. */
 const EXPIRES_SECONDS = 300;
@@ -66,16 +66,42 @@ export async function presign(
   config: R2Config,
   key: string,
   method: 'PUT' | 'GET' | 'DELETE' | 'HEAD',
+  size?: number,
 ): Promise<{ url: string; expiresIn: number }> {
+  const target = new URL(endpoint(config, key));
+  target.searchParams.set('X-Amz-Expires', String(EXPIRES_SECONDS));
+
+  // A PUT can be bound to the exact body length the quota approved. A host-only
+  // signature says nothing about how many bytes arrive: a stolen upload URL could
+  // then deliver far more than the ledger recorded, and storage is the one thing
+  // on R2 that bills past the free tier. Signing Content-Length makes the object
+  // store itself reject any other length, so the bucket can never hold more than
+  // the ledger promised. Browsers and fetch runtimes set Content-Length from the
+  // body automatically, so the honest client sends exactly this header anyway.
+  if (method === 'PUT' && size != null) {
+    const signer = new AwsV4Signer({
+      url: target.toString(),
+      method: 'PUT',
+      headers: { 'content-length': String(Math.floor(size)) },
+      // aws4fetch otherwise skips Content-Length as an unsigned hop-by-hop
+      // header; `allHeaders` is the documented override for exactly this case.
+      allHeaders: true,
+      signQuery: true,
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+      service: 's3',
+      region: 'auto',
+    });
+    const signed = await signer.sign();
+    return { url: signed.url.toString(), expiresIn: EXPIRES_SECONDS };
+  }
+
   const client = new AwsClient({
     accessKeyId: config.accessKeyId,
     secretAccessKey: config.secretAccessKey,
     service: 's3',
     region: 'auto',
   });
-
-  const target = new URL(endpoint(config, key));
-  target.searchParams.set('X-Amz-Expires', String(EXPIRES_SECONDS));
 
   const signed = await client.sign(target.toString(), {
     method,

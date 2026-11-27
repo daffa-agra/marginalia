@@ -351,7 +351,7 @@ async function handleUploadUrl(request: Request, env: Env): Promise<Response> {
     .first<{ size: number; sha256: string }>();
   if (existing && existing.sha256 === sha256.toLowerCase()) {
     const key = objectKey(journal.id, bookId, sha256);
-    const signed = await presign(config, key, 'PUT');
+    const signed = await presign(config, key, 'PUT', size);
     return json({ url: signed.url, expiresIn: signed.expiresIn, deduplicated: true });
   }
 
@@ -364,7 +364,7 @@ async function handleUploadUrl(request: Request, env: Env): Promise<Response> {
   await recordSigning(env, journal.id, rate);
 
   const key = objectKey(journal.id, bookId, sha256);
-  const signed = await presign(config, key, 'PUT');
+  const signed = await presign(config, key, 'PUT', size);
 
   // Ledger the object now, before the bytes land. An interrupted PUT then leaves a
   // row pointing at a missing object, which the cleanup pass removes — the reverse
@@ -449,6 +449,30 @@ async function handleReadUrl(request: Request, env: Env): Promise<Response> {
 
   const config = r2Config(env);
   if (!config) return storageNotConfigured();
+
+  // Sign a read only when the ledger says the object should exist. Without this
+  // check any capability holder can mint read URLs for keys it can guess (the key
+  // layout is deterministic), and each signed URL is a free-ish Class B request
+  // against the bucket even when it 404s. A 404 here is honest and costs one
+  // cheap D1 read instead of a signing plus a doomed R2 round trip.
+  const ledgered = await env.DB.prepare(
+    'SELECT sha256 FROM book_files WHERE journal_id = ? AND book_id = ?',
+  )
+    .bind(journal.id, bookId)
+    .first<{ sha256: string }>();
+  if (!ledgered || ledgered.sha256 !== sha256.toLowerCase()) {
+    return json({ error: 'No stored file matches this book.' }, 404);
+  }
+
+  // Reads share the upload signing budget: every signature is a Worker
+  // invocation, and a loop of read signings burns the same daily request
+  // allowance an upload loop would.
+  const rate = await readSigningRate(env, journal.id);
+  const allowed = checkRate(rate);
+  if (!allowed.allowed) {
+    return json({ error: allowed.reason, retryable: allowed.retryable ?? true }, 429);
+  }
+  await recordSigning(env, journal.id, rate);
 
   const key = objectKey(journal.id, bookId, sha256);
   const signed = await presign(config, key, 'GET');

@@ -43,7 +43,7 @@ export const MAX_BOOK_BYTES = 100 * 1024 * 1024;
 /** How long a deleted book's object waits before the cron removes it. */
 export const GC_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** Upload URLs per journal per hour. Retries need slack; a loop does not. */
+/** Signed URLs per journal per hour, uploads and reads together. Retries need slack; a loop does not. */
 export const UPLOAD_SIGNINGS_PER_HOUR = 120;
 
 export interface QuotaDecision {
@@ -94,7 +94,7 @@ export function checkQuota(input: {
 }
 
 /**
- * Whether an upload may be signed now.
+ * Whether a URL signing (upload or read) may happen now.
  *
  * A signing request costs a Worker invocation and nothing on R2, but an
  * unbounded loop of them is still a way to burn the daily request allowance and

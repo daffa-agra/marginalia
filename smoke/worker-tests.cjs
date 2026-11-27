@@ -52,7 +52,11 @@ fs.writeFileSync(
       esModuleInterop: true,
       declaration: false,
     },
-    include: [path.join(WORKER, 'src', 'auth.ts'), path.join(WORKER, 'src', 'sync.ts')],
+    include: [
+      path.join(WORKER, 'src', 'auth.ts'),
+      path.join(WORKER, 'src', 'sync.ts'),
+      path.join(WORKER, 'src', 'r2.ts'),
+    ],
   }),
 );
 
@@ -72,27 +76,19 @@ try {
 const auth = require(path.join(OUT, 'auth.js'));
 const sync = require(path.join(OUT, 'sync.js'));
 
-console.log('✓ Worker modules compiled');
-
 /*
- * `r2.ts` imports `aws4fetch`, which only exists in worker/node_modules. The
- * key-layout logic is pure, so it is extracted as text and evaluated on its own
- * rather than pulling a Worker dependency into the app's test tree.
+ * `r2.ts` imports `aws4fetch`, which resolves from worker/node_modules. The
+ * compiled output sits outside that tree, so a link makes the require resolve
+ * without a second install. Signing itself runs locally: no network, no secrets.
  */
-const r2Source = fs.readFileSync(path.join(WORKER, 'src', 'r2.ts'), 'utf8');
-const objectKeySource = /export function objectKey[\s\S]*?\n}/.exec(r2Source)?.[0];
-if (!objectKeySource) {
-  console.error('Could not find objectKey in r2.ts');
-  process.exit(1);
-}
-// Strip the TypeScript annotations, which is all this small function carries.
-const plainObjectKey = objectKeySource
-  .replace('export function objectKey', 'function objectKey')
-  .replace(/\(([^)]*)\)(\s*):\s*string\s*\{/, '($1)$2{')
-  .replace(/(\w+):\s*string(?=\s*[,)])/g, '$1');
-const r2 = {
-  objectKey: new Function(`${plainObjectKey}; return objectKey;`)(),
-};
+const linkDir = path.join(OUT, 'node_modules');
+fs.mkdirSync(linkDir, { recursive: true });
+fs.rmSync(path.join(linkDir, 'aws4fetch'), { force: true, recursive: true });
+fs.symlinkSync(path.join(WORKER, 'node_modules', 'aws4fetch'), path.join(linkDir, 'aws4fetch'), 'dir');
+
+const r2 = require(path.join(OUT, 'r2.js'));
+
+console.log('✓ Worker modules compiled');
 
 /* ── keys ── */
 
@@ -284,5 +280,42 @@ check('every table carrying a journal is indexed by it', () => {
   }
 });
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail > 0 ? 1 : 0);
+async function checkAsync(name, fn) {
+  try {
+    await fn();
+    pass += 1;
+    console.log(`✓ ${name}`);
+  } catch (e) {
+    fail += 1;
+    console.log(`✗ ${name} — ${e.message}`);
+  }
+}
+
+/* ── signed URLs ── */
+
+(async () => {
+  const TEST_CONFIG = {
+    accountId: 'acct',
+    accessKeyId: 'key',
+    secretAccessKey: 'secret',
+    bucket: 'bucket',
+  };
+  const hash = 'a'.repeat(64);
+
+  await checkAsync('an upload URL is bound to the declared body length', async () => {
+    const { url } = await r2.presign(TEST_CONFIG, r2.objectKey('j1', 'b1', hash), 'PUT', 12345);
+    const signed = new URL(url).searchParams.get('X-Amz-SignedHeaders') ?? '';
+    assert.ok(
+      signed.split(';').includes('content-length'),
+      `content-length is signed, got "${signed}"`,
+    );
+  });
+
+  await checkAsync('a read URL signs nothing but the host', async () => {
+    const { url } = await r2.presign(TEST_CONFIG, r2.objectKey('j1', 'b1', hash), 'GET');
+    assert.strictEqual(new URL(url).searchParams.get('X-Amz-SignedHeaders'), 'host');
+  });
+
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail > 0 ? 1 : 0);
+})();
