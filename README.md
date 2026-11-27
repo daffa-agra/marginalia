@@ -18,11 +18,19 @@ A personal book journal and EPUB reader — your shelves, notes in the margins, 
 - **Undo and honest feedback** — deleting a book or a quote can be undone; failed saves surface immediately instead of silently losing work.
 - **Your data, exported** — full JSON backups, Markdown journals and CSVs, with or without book files.
 
+## Sync, briefly
+
+The journal syncs across devices through a Cloudflare Worker backed by D1, with EPUB bytes in R2 — no account, no login. Your browser holds a **capability key**: whoever holds the key has access, and it behaves like a bookmark URL, not a password. The server stores only `SHA-256(key)`.
+
+- **Metadata** — books, quotes, shelves and reading positions sync automatically when you are online; offline, changes queue and go out on the next sync. There is no server UI: the app is the only way in.
+- **Book files** — when you add an EPUB while online, a copy is uploaded to the private bucket in the background. Open the same book on another device and the reader fetches it once, then keeps it locally. If a book is not in this browser and cannot be fetched, the reader says so instead of pretending.
+- **Your data, exported** still applies — exports never depend on the server.
+
 ## What it does not do yet
 
-- **No sync.** Everything is local to one browser. The Cloudflare backend (D1 + R2) is designed but not built.
 - **No scroll mode.** The reader pages; it does not offer continuous scrolling as an alternative.
 - EPUB only. No PDF, MOBI or AZW3, and no DRM-protected files.
+- Sync conflicts from edits made on two devices in the same millisecond surface in Settings but are not yet editable side by side.
 
 ## Running it
 
@@ -95,9 +103,9 @@ The reader is planned in phases. The architecture and typography specifications 
 - **Phase 0** — IndexedDB storage and migration *(built)*
 - **Phase 1** — the reader: chapters, TOC, typography, position restore, paginated page turns *(built)*
 - **Phase 2** — reading ⇄ writing: selection, margin notes, anchored highlights *(built)*
-- **Phase 3** — Cloudflare backend: EPUB upload to R2, shelves end to end
-- **Phase 4** — metadata sync across devices
-- **Phase 5** — hardening
+- **Phase 3** — Cloudflare backend: EPUB upload to R2, shelves end to end *(built)*
+- **Phase 4** — metadata sync across devices *(built)*
+- **Phase 5** — hardening *(ongoing)*
 
 ## Importing Play Books highlights
 
