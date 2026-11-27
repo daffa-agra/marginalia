@@ -114,10 +114,16 @@ export function toRow(
 
   const table = kind === 'books' ? 'books' : kind === 'quotes' ? 'quotes' : 'shelves';
   if (table === 'shelves') {
+    // Shelves use a *composite* identity with the journal, because a shelf id is
+    // only unique within one journal. Two journals can each have a shelf called
+    // "s1", and a global primary key would make the second one silently fail to
+    // insert — the row exists, so the conflict target matches another journal's
+    // row and the `updated_at` guard rejects the write. That is what happened:
+    // shelves appeared to save and never came back.
     return {
       sql: `INSERT INTO shelves (id, journal_id, name, sort_order, created_at, updated_at, deleted_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
+            ON CONFLICT(id, journal_id) DO UPDATE SET
               name = excluded.name, sort_order = excluded.sort_order,
               updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
             WHERE excluded.updated_at > shelves.updated_at`,
@@ -147,7 +153,7 @@ export function toRow(
   return {
     sql: `INSERT INTO ${table} (id, journal_id, ${names.join(', ')}, data, updated_at, deleted_at)
           VALUES (?, ?, ${placeholders}, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET
+          ON CONFLICT(id, journal_id) DO UPDATE SET
             ${updates}, data = excluded.data,
             updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
           WHERE excluded.updated_at > ${table}.updated_at`,

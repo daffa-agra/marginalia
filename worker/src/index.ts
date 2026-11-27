@@ -14,6 +14,8 @@ import { hashKey, json, looksLikeKey, timingSafeEqual, unauthorised } from './au
 import { mergeCollection, toRow } from './sync';
 import type { Syncable } from './sync';
 import { objectKey, presign } from './r2';
+import { isConfigured } from './r2';
+import { checkQuota, checkRate } from './quota';
 
 export interface Env {
   DB: D1Database;
@@ -28,10 +30,8 @@ export interface Env {
   ALLOWED_ORIGINS?: string;
 }
 
-/** Bodies larger than this are refused before parsing. */
+/** Sync bodies above this are refused before being read. */
 const MAX_SYNC_BODY = 2 * 1024 * 1024;
-/** Per-book cap, matching the client's EPUB guard. */
-const MAX_BOOK_BYTES = 100 * 1024 * 1024;
 
 const DEFAULT_ORIGINS = [
   'https://books.daffagra.my.id',
@@ -103,6 +103,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/**
+ * The R2 signing configuration, or `null` when it has not been set up.
+ *
+ * Checked explicitly so a missing secret produces "file storage is not
+ * configured" rather than a 500 from inside the signer.
+ */
+function r2Config(env: Env): { accountId: string; accessKeyId: string; secretAccessKey: string; bucket: string } | null {
+  const config = {
+    accountId: env.R2_ACCOUNT_ID,
+    accessKeyId: env.R2_ACCESS_KEY_ID,
+    secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+    bucket: env.R2_BUCKET,
+  };
+  return isConfigured(config) ? config : null;
+}
+
+function storageNotConfigured(): Response {
+  return json(
+    { error: 'File storage is not configured on this server yet. Reading and syncing still work.' },
+    503,
+  );
+}
+
 /** Coerces an untrusted collection into sync records, dropping malformed ones. */
 function pickRecords(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value)) return [];
@@ -123,11 +146,21 @@ async function handleHello(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleSync(request: Request, env: Env, cors: Record<string, string>): Promise<Response> {
+  // Reject on the declared length before reading the body: reading it first and
+  // then checking would let a client make the Worker buffer megabytes it is about
+  // to refuse, which is exactly the CPU/memory budget this endpoint must respect.
+  const declared = Number(request.headers.get('Content-Length') ?? '0');
+  if (Number.isFinite(declared) && declared > MAX_SYNC_BODY) {
+    return badRequest(`Sync body is limited to ${Math.round(MAX_SYNC_BODY / 1024)} kB`);
+  }
+
   const journal = await resolveJournal(request, env, false);
   if (!journal) return unauthorised();
 
   const text = await request.text();
-  if (text.length > MAX_SYNC_BODY) return badRequest('Sync body is too large');
+  if (text.length > MAX_SYNC_BODY) {
+    return badRequest(`Sync body is limited to ${Math.round(MAX_SYNC_BODY / 1024)} kB`);
+  }
 
   let body: unknown;
   try {
@@ -210,15 +243,19 @@ async function handleSync(request: Request, env: Env, cors: Record<string, strin
   }
 
   // Everything changed since the client's last revision, tombstones included.
+  //
+  // The `since` filter is on `updated_at`, which is the field the client tracks.
+  // It must be applied consistently: filtering books but not quotes meant a
+  // client that had already seen a quote was handed it again on every sync.
   const out = {
     books: await env.DB.prepare(
-      "SELECT data, deleted_at FROM books WHERE journal_id = ? AND updated_at > ? AND updated_at <= ?",
-    ).bind(journal.id, since, Date.now()).all<{ data: string; deleted_at: number | null }>(),
+      'SELECT data, deleted_at FROM books WHERE journal_id = ? AND updated_at > ?',
+    ).bind(journal.id, since).all<{ data: string; deleted_at: number | null }>(),
     quotes: await env.DB.prepare(
-      "SELECT data, deleted_at FROM quotes WHERE journal_id = ? AND updated_at > ? AND updated_at <= ?",
-    ).bind(journal.id, since, Date.now()).all<{ data: string; deleted_at: number | null }>(),
+      'SELECT data, deleted_at FROM quotes WHERE journal_id = ? AND updated_at > ?',
+    ).bind(journal.id, since).all<{ data: string; deleted_at: number | null }>(),
     shelves: await env.DB.prepare(
-      "SELECT id, name, sort_order, created_at, updated_at, deleted_at FROM shelves WHERE journal_id = ? AND updated_at > ?",
+      'SELECT id, name, sort_order, created_at, updated_at, deleted_at FROM shelves WHERE journal_id = ? AND updated_at > ?',
     ).bind(journal.id, since).all(),
     positions: await env.DB.prepare(
       'SELECT book_id, chapter, fraction, updated_at FROM positions WHERE journal_id = ? AND updated_at > ?',
@@ -278,20 +315,107 @@ async function handleUploadUrl(request: Request, env: Env): Promise<Response> {
   if (!bookId) return badRequest('bookId is required');
   if (!/^[a-f0-9]{64}$/i.test(sha256)) return badRequest('sha256 must be 64 hex characters');
   if (!Number.isFinite(size) || size <= 0) return badRequest('size must be a positive number');
-  if (size > MAX_BOOK_BYTES) return badRequest(`Books are limited to ${MAX_BOOK_BYTES / 1024 / 1024} MB`);
+
+  const config = r2Config(env);
+  if (!config) return storageNotConfigured();
+
+  // ── keep this inside the free tier ──
+  //
+  // Two reads answer both questions: how much this journal uses, and how much the
+  // deployment uses. `bytes_used` is a denormalised running total per journal so
+  // the first is one row; the second is a SUM over journals, which is a handful
+  // of rows for a personal deployment.
+  const usage = await readUsage(env, journal.id);
+  const quota = checkQuota({ size, journalBytes: usage.journalBytes, totalBytes: usage.totalBytes });
+  if (!quota.allowed) {
+    return json({ error: quota.reason, retryable: quota.retryable ?? false }, 413);
+  }
+
+  // A re-upload of the same book costs no new bytes: one object, keyed by hash.
+  const existing = await env.DB.prepare(
+    'SELECT size, sha256 FROM book_files WHERE journal_id = ? AND book_id = ?',
+  )
+    .bind(journal.id, bookId)
+    .first<{ size: number; sha256: string }>();
+  if (existing && existing.sha256 === sha256.toLowerCase()) {
+    const key = objectKey(journal.id, bookId, sha256);
+    const signed = await presign(config, key, 'PUT');
+    return json({ url: signed.url, expiresIn: signed.expiresIn, deduplicated: true });
+  }
+
+  // Rate limit last, so a refused-by-quota request does not consume the budget.
+  const rate = await readSigningRate(env, journal.id);
+  const allowed = checkRate(rate);
+  if (!allowed.allowed) {
+    return json({ error: allowed.reason, retryable: allowed.retryable ?? true }, 429);
+  }
+  await recordSigning(env, journal.id, rate);
 
   const key = objectKey(journal.id, bookId, sha256);
-  const signed = await presign(
-    {
-      accountId: env.R2_ACCOUNT_ID,
-      accessKeyId: env.R2_ACCESS_KEY_ID,
-      secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-      bucket: env.R2_BUCKET,
-    },
-    key,
-    'PUT',
-  );
+  const signed = await presign(config, key, 'PUT');
+
+  // Ledger the object now, before the bytes land. An interrupted PUT then leaves a
+  // row pointing at a missing object, which the cleanup pass removes — the reverse
+  // (bytes with no row) is the case that would strand storage forever.
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO book_files (journal_id, book_id, sha256, size, created_at, delete_after)
+       VALUES (?, ?, ?, ?, ?, NULL)
+       ON CONFLICT(journal_id, book_id) DO UPDATE SET
+         sha256 = excluded.sha256, size = excluded.size, created_at = excluded.created_at, delete_after = NULL`,
+    ).bind(journal.id, bookId, sha256.toLowerCase(), size, Date.now()),
+    env.DB.prepare(
+      `UPDATE journals SET bytes_used = (
+         SELECT COALESCE(SUM(size), 0) FROM book_files WHERE journal_id = ? AND delete_after IS NULL
+       ) WHERE id = ?`,
+    ).bind(journal.id, journal.id),
+  ]);
+
   return json({ url: signed.url, expiresIn: signed.expiresIn });
+}
+
+/** How many bytes this journal and the whole deployment are storing. */
+async function readUsage(env: Env, journalId: string): Promise<{ journalBytes: number; totalBytes: number }> {
+  const journalRow = await env.DB.prepare('SELECT bytes_used FROM journals WHERE id = ?')
+    .bind(journalId)
+    .first<{ bytes_used: number }>();
+  const totalRow = await env.DB.prepare(
+    'SELECT COALESCE(SUM(bytes_used), 0) AS total FROM journals',
+  ).first<{ total: number }>();
+  return {
+    journalBytes: journalRow?.bytes_used ?? 0,
+    totalBytes: totalRow?.total ?? 0,
+  };
+}
+
+/** Signing counts for the current hour, reset lazily on read. */
+async function readSigningRate(env: Env, journalId: string): Promise<{
+  signingsThisHour: number;
+  windowStartedAt: number;
+  now: number;
+}> {
+  const row = await env.DB.prepare(
+    'SELECT upload_signings, upload_window_start FROM journals WHERE id = ?',
+  )
+    .bind(journalId)
+    .first<{ upload_signings: number; upload_window_start: number }>();
+  return {
+    signingsThisHour: row?.upload_signings ?? 0,
+    windowStartedAt: row?.upload_window_start ?? 0,
+    now: Date.now(),
+  };
+}
+
+async function recordSigning(
+  env: Env,
+  journalId: string,
+  rate: { signingsThisHour: number; windowStartedAt: number; now: number },
+): Promise<void> {
+  const windowMs = 60 * 60 * 1000;
+  const fresh = rate.now - rate.windowStartedAt >= windowMs;
+  await env.DB.prepare('UPDATE journals SET upload_signings = ?, upload_window_start = ? WHERE id = ?')
+    .bind(fresh ? 1 : rate.signingsThisHour + 1, fresh ? rate.now : rate.windowStartedAt, journalId)
+    .run();
 }
 
 async function handleReadUrl(request: Request, env: Env): Promise<Response> {
@@ -311,17 +435,11 @@ async function handleReadUrl(request: Request, env: Env): Promise<Response> {
   if (!bookId) return badRequest('bookId is required');
   if (!/^[a-f0-9]{64}$/i.test(sha256)) return badRequest('sha256 must be 64 hex characters');
 
+  const config = r2Config(env);
+  if (!config) return storageNotConfigured();
+
   const key = objectKey(journal.id, bookId, sha256);
-  const signed = await presign(
-    {
-      accountId: env.R2_ACCOUNT_ID,
-      accessKeyId: env.R2_ACCESS_KEY_ID,
-      secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-      bucket: env.R2_BUCKET,
-    },
-    key,
-    'GET',
-  );
+  const signed = await presign(config, key, 'GET');
   return json({ url: signed.url, expiresIn: signed.expiresIn });
 }
 

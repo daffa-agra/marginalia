@@ -9,35 +9,50 @@
 -- the key hash is its only credential.
 CREATE TABLE IF NOT EXISTS journals (
   id             TEXT PRIMARY KEY,          -- public, opaque
-  key_hash       TEXT NOT NULL UNIQUE,      -- SHA-256 hex of the capability key
+  key_hash       TEXT NOT NULL,             -- SHA-256 hex of the capability key
   schema_version INTEGER NOT NULL DEFAULT 3,
   revision       INTEGER NOT NULL DEFAULT 0,
   created_at     INTEGER NOT NULL,
   last_seen_at   INTEGER NOT NULL
 );
 
+-- The key hash must be unique: it is how a journal is found, and the
+-- create-on-first-contact insert upserts on it. Declared as a separate index
+-- rather than a column constraint because this table may already exist from an
+-- earlier schema that lacked it, and `CREATE TABLE IF NOT EXISTS` would silently
+-- keep the old definition.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_journals_key_hash ON journals(key_hash);
+
 -- Shelves. updated_at/deleted_at make renames and deletions sync like any
--- other record; the manual order is part of the record.
+-- other record; the manual order is part of the record. Composite primary key
+-- for the same reason as books: a shelf id is only unique within one journal.
 CREATE TABLE IF NOT EXISTS shelves (
-  id          TEXT PRIMARY KEY,
+  id          TEXT NOT NULL,
   journal_id  TEXT NOT NULL,
   name        TEXT NOT NULL,
   sort_order  INTEGER NOT NULL DEFAULT 0,
   created_at  INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL,
   deleted_at  INTEGER,
+  PRIMARY KEY (id, journal_id),
   FOREIGN KEY (journal_id) REFERENCES journals(id) ON DELETE CASCADE
 );
 
 -- Books. `shelf_id` is the whole of shelf membership: one book, one shelf, and
 -- ON DELETE SET NULL means deleting a shelf can never take a book with it.
+--
+-- The primary key is (id, journal_id), not id alone. Record ids are generated on
+-- the client, so two journals can hold the same id; with a global primary key the
+-- second journal's write would match the first's row and be rejected by the
+-- `updated_at` guard, silently losing the record. See migrations/002.
 CREATE TABLE IF NOT EXISTS books (
-  id          TEXT PRIMARY KEY,
+  id          TEXT NOT NULL,
   journal_id  TEXT NOT NULL,
   shelf_id    TEXT,
   data        TEXT NOT NULL,               -- JSON: the client Book record
   updated_at  INTEGER NOT NULL,
   deleted_at  INTEGER,
+  PRIMARY KEY (id, journal_id),
   FOREIGN KEY (journal_id) REFERENCES journals(id) ON DELETE CASCADE,
   FOREIGN KEY (shelf_id) REFERENCES shelves(id) ON DELETE SET NULL
 );
@@ -45,12 +60,13 @@ CREATE TABLE IF NOT EXISTS books (
 -- Quotes (marginalia). Columnar where the client needs it to sort or filter,
 -- JSON for the rest because that shape is still evolving.
 CREATE TABLE IF NOT EXISTS quotes (
-  id          TEXT PRIMARY KEY,
+  id          TEXT NOT NULL,
   journal_id  TEXT NOT NULL,
   book_id     TEXT NOT NULL,
   data        TEXT NOT NULL,               -- JSON: text, note, anchor, percent
   updated_at  INTEGER NOT NULL,
   deleted_at  INTEGER,
+  PRIMARY KEY (id, journal_id),
   FOREIGN KEY (journal_id) REFERENCES journals(id) ON DELETE CASCADE
 );
 

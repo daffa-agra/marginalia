@@ -188,6 +188,30 @@ check('a book row keeps the whole record as JSON', () => {
   assert.ok(params.some((p) => typeof p === 'string' && p.includes('"title":"Sea"')), 'the record is stored');
 });
 
+check('records conflict on (id, journal_id), not on id alone', () => {
+  // Two journals may each hold a record with the same client-generated id. A
+  // global primary key made the second journal's upsert match the first's row
+  // and get rejected by the updated_at guard, so the write vanished silently.
+  // Shelves hit this first because their ids are often literally "s1".
+  for (const kind of ['books', 'quotes', 'shelves']) {
+    const { sql } = sync.toRow(kind, 'j1', { id: 's1', updatedAt: 5, name: 'x', text: 'x', bookId: 'b1' });
+    assert.match(sql, /ON CONFLICT\(id, journal_id\)/, `${kind} must scope its conflict target`);
+  }
+});
+
+check('the schema gives every record table a composite primary key', () => {
+  const sql = fs.readFileSync(path.join(WORKER, 'src', 'schema.sql'), 'utf8');
+  for (const table of ['books', 'quotes', 'shelves']) {
+    const block = new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\([\\s\\S]*?\\)`).exec(sql)?.[0] ?? '';
+    assert.match(block, /PRIMARY KEY \(id, journal_id\)/, `${table} needs (id, journal_id)`);
+  }
+  assert.doesNotMatch(
+    /CREATE TABLE IF NOT EXISTS (books|quotes|shelves) \(\s*id\s+TEXT PRIMARY KEY/.test(sql) ? 'bad' : '',
+    /bad/,
+    'no table may key records on id alone',
+  );
+});
+
 check('a position row is keyed by book, not by a synthetic id', () => {
   const { sql, params } = sync.toRow('positions', 'j1', {
     id: 'b1', updatedAt: 5, chapter: 3, fraction: 0.25,
@@ -244,7 +268,9 @@ check('deleting a shelf cannot take its books with it', () => {
 });
 
 check('the schema is re-runnable', () => {
-  const sql = fs.readFileSync(path.join(WORKER, 'src', 'schema.sql'), 'utf8');
+  const raw = fs.readFileSync(path.join(WORKER, 'src', 'schema.sql'), 'utf8');
+  // Strip comments: the prose mentions CREATE TABLE and would inflate the count.
+  const sql = raw.replace(/--[^\n]*/g, '');
   const creates = sql.match(/CREATE TABLE /g) ?? [];
   const guarded = sql.match(/CREATE TABLE IF NOT EXISTS /g) ?? [];
   assert.strictEqual(creates.length, guarded.length, 'every CREATE TABLE is guarded');

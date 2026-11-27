@@ -23,6 +23,17 @@ export interface R2Config {
   bucket: string;
 }
 
+/**
+ * Whether signing is configured at all.
+ *
+ * Without this check a missing secret surfaces as an opaque 500 from deep inside
+ * the signer. The endpoint can then say plainly that file storage is not set up,
+ * which is actionable, instead of "something went wrong", which is not.
+ */
+export function isConfigured(config: Partial<R2Config>): config is R2Config {
+  return Boolean(config.accountId && config.accessKeyId && config.secretAccessKey && config.bucket);
+}
+
 /** The key layout from the design: content hash makes uploads idempotent. */
 export function objectKey(journalId: string, bookId: string, sha256: string): string {
   // Both ids come from the client, so they are sanitised rather than trusted:
@@ -47,11 +58,14 @@ function endpoint(config: R2Config, key: string): string {
  * `aws4fetch` computes the SigV4 signature locally, which is a few microseconds —
  * well inside the CPU budget, and it needs no Node APIs, which the Workers
  * runtime does not have.
+ *
+ * DELETE is signed as a plain DELETE: the method is part of the signature, and
+ * the cleanup pass calls it directly rather than through the API surface.
  */
 export async function presign(
   config: R2Config,
   key: string,
-  method: 'PUT' | 'GET',
+  method: 'PUT' | 'GET' | 'DELETE' | 'HEAD',
 ): Promise<{ url: string; expiresIn: number }> {
   const client = new AwsClient({
     accessKeyId: config.accessKeyId,
