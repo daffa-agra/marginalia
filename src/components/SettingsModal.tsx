@@ -27,12 +27,13 @@ import type { useToasts } from '../lib/toasts';
  * consequence spelled out, rather than buried.
  */
 export function SettingsModal({
-  data,
+  rawData,
   onClose,
   onSynced,
   notify,
 }: {
-  data: JournalData;
+  /** The stored journal, tombstones included — what the sync pushes. */
+  rawData: JournalData;
   onClose: () => void;
   /** Hands the merged journal back after a successful sync. */
   onSynced: (next: JournalData) => void;
@@ -46,7 +47,7 @@ export function SettingsModal({
   const [persisted, setPersisted] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const pending = useMemo(() => pendingCount(data, state.revision), [data, state.revision]);
+  const pending = useMemo(() => pendingCount(rawData, state.pushedAt), [rawData, state.pushedAt]);
 
   useEffect(() => {
     void (async () => {
@@ -59,7 +60,9 @@ export function SettingsModal({
   const syncNow = useCallback(async () => {
     setBusy(true);
     try {
-      const outcome = await runSync(data, setState);
+      // The raw journal, tombstones included: a delete is exactly the record
+      // the sync has to push, and the filtered view no longer carries it.
+      const outcome = await runSync(rawData, setState);
       if (outcome.data) {
         onSynced(outcome.data);
         notify('Journal synced');
@@ -71,7 +74,7 @@ export function SettingsModal({
     } finally {
       setBusy(false);
     }
-  }, [data, onSynced, notify]);
+  }, [rawData, onSynced, notify]);
 
   const linkDevice = useCallback(() => {
     const candidate = normaliseKeyInput(linkInput);

@@ -52,10 +52,14 @@ function isDeleted(record: Syncable): boolean {
 
 /** Whether two records carry the same content, ignoring field order. */
 function sameBody(a: Syncable, b: Syncable): boolean {
+  // `undefined` values are absent values: a record whose optional field was
+  // set to undefined and one that never had the key are the same record. A
+  // JSON round trip through the server drops the keys entirely, so comparing
+  // them literally would report every echoed record as a conflict.
   const normalise = (value: Syncable) =>
     JSON.stringify(
       Object.keys(value)
-        .filter((k) => k !== 'updatedAt')
+        .filter((k) => k !== 'updatedAt' && (value as unknown as Record<string, unknown>)[k] !== undefined)
         .sort()
         .map((k) => [k, (value as unknown as Record<string, unknown>)[k]]),
     );

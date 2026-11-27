@@ -21,6 +21,10 @@ export interface Shelf {
   /** Manual order of the shelves themselves. */
   sortOrder: number;
   createdAt: number;
+  /** Unix ms of the last edit, so renames and deletes order in a sync. */
+  updatedAt?: number;
+  /** Unix ms. A tombstone: the shelf was deleted and the delete must sync. */
+  deletedAt?: number;
 }
 
 /** The shelf id every book carries when it is on no shelf of its own. */
@@ -42,6 +46,12 @@ export interface Book {
   id: string;
   title: string;
   author: string;
+  /**
+   * Unix ms of the last edit to this record. Bumped by the store on every
+   * change, it is the clock a sync uses to decide which device's edit is
+   * newer. (The reading position has its own, more granular, clock.)
+   */
+  updatedAt?: number;
   /** Books of the same series share a group name. */
   series?: string;
   /** Order within the series, 1-based. */
@@ -81,6 +91,8 @@ export interface Book {
   file?: EpubFile;
   /** Unix ms when the book was added to the journal. */
   createdAt: number;
+  /** Unix ms. A tombstone: the book was deleted and the delete must sync. */
+  deletedAt?: number;
 }
 
 export interface Quote {

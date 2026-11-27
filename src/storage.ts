@@ -209,6 +209,10 @@ function pickBook(b: unknown): Book | null {
     queuePosition: num(raw.queuePosition) != null ? Math.max(0, num(raw.queuePosition)!) : undefined,
     position: pickPosition(raw.position),
     file: pickEpubFile(raw.file),
+    // The sync clocks. updatedAt orders edits between devices; deletedAt is
+    // the tombstone that carries a delete. Both must survive a reload.
+    updatedAt: num(raw.updatedAt),
+    deletedAt: num(raw.deletedAt),
     createdAt: num(raw.createdAt) ?? Date.now(),
   };
 }
@@ -297,6 +301,9 @@ function pickShelf(s: unknown): Shelf | null {
     name,
     sortOrder: num(raw.sortOrder) ?? 0,
     createdAt: num(raw.createdAt) ?? Date.now(),
+    // Shelf renames and deletes sync like any other record.
+    updatedAt: num(raw.updatedAt),
+    deletedAt: num(raw.deletedAt),
   };
 }
 

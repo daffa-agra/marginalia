@@ -13,6 +13,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { BrandMark, Icon } from './components/icons';
 import { ToastRegion, useToasts } from './lib/toasts';
 import { listPendingDeletes, removePendingDelete } from './lib/pendingDeletes';
+import { useAutoSync } from './lib/useAutoSync';
 import { cx } from './lib/utils';
 
 type View = 'library' | 'plan' | 'quotes' | 'stats';
@@ -34,6 +35,11 @@ const TITLES: Record<View, string> = {
 export default function App() {
   const store = useJournal();
   const { toasts, notify, dismiss } = useToasts();
+
+  // Annotations, positions and edits cross devices on their own: every local
+  // change pushes after a short debounce, and anything another device wrote
+  // arrives on the next catch-up. Sync state still surfaces in Settings.
+  useAutoSync(store.rawData, store.replaceAll);
   const [view, setView] = useState<View>('library');
   const [openBookId, setOpenBookId] = useState<string | null>(null);
   const [readingBookId, setReadingBookId] = useState<string | null>(null);
@@ -329,7 +335,7 @@ export default function App() {
       )}
       {settingsOpen && (
         <SettingsModal
-          data={store.data}
+          rawData={store.rawData}
           onClose={() => setSettingsOpen(false)}
           onSynced={store.replaceAll}
           notify={notify}

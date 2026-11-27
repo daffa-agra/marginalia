@@ -36,12 +36,34 @@ function withoutSample(data: JournalData): JournalData {
 }
 
 /**
+ * Tombstones are how a delete reaches other devices: the record stays in the
+ * journal with `deletedAt` set, syncs as an ordinary record, and every view
+ * filters it out. This is the one filter between the stored journal and what
+ * the reader sees — exporters, import dedupe and the reader all consume the
+ * filtered shape, so deleted writing is invisible everywhere, not merely
+ * hidden in one list.
+ */
+function stripTombstones(data: JournalData): JournalData {
+  return {
+    ...data,
+    books: data.books.filter((b) => !b.deletedAt),
+    quotes: data.quotes.filter((q) => !q.deletedAt),
+    shelves: data.shelves.filter((s) => !s.deletedAt),
+  };
+}
+
+/**
  * Single store for the journal. Everything the user does goes through
  * these actions; each one saves to localStorage immediately, and a failed
  * write is published to the UI instead of being swallowed.
+ *
+ * The state holds the whole journal *including tombstones*; `data` — what
+ * every view, exporter and the reader consumes — is that journal with
+ * tombstones stripped. `rawData` is the sync's input, because a delete is
+ * exactly the thing the sync must carry.
  */
 export function useJournal() {
-  const [data, setData] = useState<JournalData>(() => {
+  const [journal, setJournal] = useState<JournalData>(() => {
     if (hasStoredJournal()) return loadData();
     // First launch only: an in-memory sample so no screen starts empty.
     // It is never written to storage unless the reader chooses to keep it.
@@ -61,30 +83,34 @@ export function useJournal() {
   /** Any edit turns the sample shelf into a real journal, minus the sample. */
   const mutate = useCallback((updater: (current: JournalData) => JournalData) => {
     const firstWrite = !hasStoredRef.current;
-    setData((current) => {
+    setJournal((current) => {
       const next = updater(current);
       return firstWrite ? withoutSample(next) : next;
     });
     setHasStored(true);
   }, []);
 
-  // Persist only once there is a journal of the reader's own.
+  // Persist the raw journal — tombstones included, or a delete could not sync.
   useEffect(() => {
     if (!hasStored) return;
-    saveData(data);
-  }, [data, hasStored]);
+    saveData(journal);
+  }, [journal, hasStored]);
 
   const persistNow = useCallback(() => {
     setHasStored(true);
-    setData((current) => {
+    setJournal((current) => {
       saveData(current);
       return current;
     });
   }, []);
 
+  /** The journal as the reader sees it: no tombstones, ever. */
+  const data = useMemo(() => stripTombstones(journal), [journal]);
+
   const addBook = useCallback(
     (input: Omit<Book, 'id' | 'createdAt'>): Book => {
-      const book: Book = { ...input, id: makeId('b'), createdAt: Date.now() };
+      const now = Date.now();
+      const book: Book = { ...input, id: makeId('b'), createdAt: now, updatedAt: now };
       mutate((d) => ({ ...d, books: [book, ...d.books] }));
       return book;
     },
@@ -95,51 +121,69 @@ export function useJournal() {
     (id: string, patch: Partial<Book>) => {
       mutate((d) => ({
         ...d,
-        books: d.books.map((b) => (b.id === id ? { ...b, ...patch } : b)),
+        // `updatedAt` is the clock a sync orders edits by, so the store bumps
+        // it on every change rather than trusting each caller to remember.
+        books: d.books.map((b) => (b.id === id ? { ...b, ...patch, updatedAt: Date.now() } : b)),
       }));
     },
     [mutate],
   );
 
-  /** Removes a book and its quotes, handing both back so the caller can offer an undo. */
+  /**
+   * Deletes a book and everything written in it.
+   *
+   * The records are not removed: they become tombstones, so the delete
+   * propagates to other devices instead of being overwritten by their next
+   * sync. Undo restores them by clearing the tombstone — itself an edit, so a
+   * changed mind propagates with the same force as the delete did.
+   */
   const deleteBook = useCallback(
     (id: string): { book: Book; quotes: Quote[] } | undefined => {
-      const book = data.books.find((b) => b.id === id);
+      const book = journal.books.find((b) => b.id === id);
       if (!book) return undefined;
-      const quotes = data.quotes.filter((q) => q.bookId === id);
+      const quotes = journal.quotes.filter((q) => q.bookId === id);
+      const now = Date.now();
       mutate((d) => {
         // Deleting a queued book must not leave a hole in the plan, or every
         // book behind it keeps a stale position number.
         const remainingQueue = d.books
-          .filter((b) => typeof b.queuePosition === 'number' && b.id !== id)
+          .filter((b) => typeof b.queuePosition === 'number' && b.id !== id && !b.deletedAt)
           .sort((a, b) => (a.queuePosition ?? 0) - (b.queuePosition ?? 0));
         const positions = new Map(remainingQueue.map((b, index) => [b.id, index]));
         return {
           ...d,
-          books: d.books
-            .filter((b) => b.id !== id)
-            .map((b) => {
+          books: d.books.map((b) => {
+            if (b.id !== id) {
               const pos = positions.get(b.id);
               return pos === undefined ? b : { ...b, queuePosition: pos };
-            }),
-          quotes: d.quotes.filter((q) => q.bookId !== id),
+            }
+            return { ...b, deletedAt: now, updatedAt: now };
+          }),
+          quotes: d.quotes.map((q) =>
+            q.bookId === id ? { ...q, deletedAt: now, updatedAt: now } : q,
+          ),
         };
       });
       return { book, quotes };
     },
-    [data.books, data.quotes, mutate],
+    [journal.books, journal.quotes, mutate],
   );
 
   /** Puts a deleted book and its quotes back. Used by the undo message. */
   const restoreBook = useCallback(
     (book: Book, quotes: Quote[]) => {
+      const now = Date.now();
       mutate((d) => ({
         ...d,
-        books: d.books.some((b) => b.id === book.id) ? d.books : [...d.books, book],
-        quotes: [
-          ...d.quotes,
-          ...quotes.filter((q) => !d.quotes.some((existing) => existing.id === q.id)),
-        ],
+        // Clearing the tombstone is itself an edit: a changed mind must reach
+        // other devices with the same force the delete had.
+        books: d.books.map((b) =>
+          b.id === book.id ? { ...b, ...book, deletedAt: undefined, updatedAt: now } : b,
+        ),
+        quotes: d.quotes.map((q) => {
+          const restored = quotes.find((r) => r.id === q.id);
+          return restored ? { ...q, ...restored, deletedAt: undefined, updatedAt: now } : q;
+        }),
       }));
     },
     [mutate],
@@ -153,69 +197,76 @@ export function useJournal() {
       if (!trimmed) return null;
       // Two shelves with the same name are indistinguishable in the bar, and
       // "move to Reading" would be a coin flip. Reject rather than allow it.
-      if (data.shelves.some((s) => s.name.toLowerCase() === trimmed.toLowerCase())) return null;
-      const shelf = makeShelf(trimmed, data.shelves.length);
+      if (journal.shelves.some((s) => !s.deletedAt && s.name.toLowerCase() === trimmed.toLowerCase())) return null;
+      const shelf = makeShelf(trimmed, journal.shelves.length);
       mutate((d) => ({ ...d, shelves: [...d.shelves, shelf] }));
       return shelf;
     },
-    [data.shelves, mutate],
+    [journal.shelves, mutate],
   );
 
   const renameShelf = useCallback(
     (id: string, name: string): boolean => {
       const trimmed = name.trim();
-      if (!trimmed) return false;
       if (
-        data.shelves.some(
-          (s) => s.id !== id && s.name.toLowerCase() === trimmed.toLowerCase(),
+        journal.shelves.some(
+          (s) => s.id !== id && !s.deletedAt && s.name.toLowerCase() === trimmed.toLowerCase(),
         )
       ) {
         return false;
       }
       mutate((d) => ({
         ...d,
-        shelves: d.shelves.map((s) => (s.id === id ? { ...s, name: trimmed } : s)),
+        shelves: d.shelves.map((s) =>
+          s.id === id ? { ...s, name: trimmed, updatedAt: Date.now() } : s,
+        ),
       }));
       return true;
     },
-    [data.shelves, mutate],
+    [journal.shelves, mutate],
   );
 
   /**
    * Deletes a shelf without touching its books: they fall back to Unshelved,
-   * which is the whole point of the partition.
+   * which is the whole point of the partition. The shelf itself becomes a
+   * tombstone so the delete reaches other devices.
    */
   const deleteShelf = useCallback(
     (id: string): number => {
-      const count = data.books.filter((b) => b.shelfId === id).length;
+      const count = journal.books.filter((b) => b.shelfId === id && !b.deletedAt).length;
+      const now = Date.now();
       mutate((d) => ({
         ...d,
-        shelves: d.shelves.filter((s) => s.id !== id),
-        books: d.books.map((b) => (b.shelfId === id ? { ...b, shelfId: undefined } : b)),
+        shelves: d.shelves.map((s) =>
+          s.id === id ? { ...s, deletedAt: now, updatedAt: now } : s,
+        ),
+        books: d.books.map((b) =>
+          b.shelfId === id && !b.deletedAt
+            ? { ...b, shelfId: undefined, updatedAt: now }
+            : b,
+        ),
       }));
       return count;
     },
-    [data.books, mutate],
+    [journal.books, journal.shelves, mutate],
   );
 
   /** Moves a book to a shelf, or to Unshelved when shelfId is undefined. */
   const moveBookToShelf = useCallback(
     (bookId: string, shelfId: string | undefined) => {
-      mutate((d) => ({
-        ...d,
-        books: d.books.map((b) => (b.id === bookId ? { ...b, shelfId } : b)),
-      }));
+      updateBook(bookId, { shelfId });
     },
-    [mutate],
+    [updateBook],
   );
 
   const reorderShelves = useCallback(
     (orderedIds: string[]) => {
+      const now = Date.now();
       mutate((d) => ({
         ...d,
         shelves: d.shelves.map((s) => {
           const index = orderedIds.indexOf(s.id);
-          return index >= 0 ? { ...s, sortOrder: index } : s;
+          return index >= 0 ? { ...s, sortOrder: index, updatedAt: now } : s;
         }),
       }));
     },
@@ -227,22 +278,16 @@ export function useJournal() {
   /** Records that an EPUB is attached to a book. Bytes stay in IndexedDB. */
   const attachBookFile = useCallback(
     (bookId: string, file: Book['file']) => {
-      mutate((d) => ({
-        ...d,
-        books: d.books.map((b) => (b.id === bookId ? { ...b, file } : b)),
-      }));
+      updateBook(bookId, { file });
     },
-    [mutate],
+    [updateBook],
   );
 
   const removeBookFile = useCallback(
     (bookId: string) => {
-      mutate((d) => ({
-        ...d,
-        books: d.books.map((b) => (b.id === bookId ? { ...b, file: undefined } : b)),
-      }));
+      updateBook(bookId, { file: undefined });
     },
-    [mutate],
+    [updateBook],
   );
 
   const addQuotes = useCallback(
@@ -281,21 +326,31 @@ export function useJournal() {
     [mutate],
   );
 
-  /** Removes a quote and hands it back so the caller can offer an undo. */
+  /**
+   * Deletes a quote as a tombstone, so the delete propagates rather than being
+   * resurrected by another device's next sync.
+   */
   const deleteQuote = useCallback(
     (id: string): Quote | undefined => {
-      const removed = data.quotes.find((q) => q.id === id);
-      mutate((d) => ({ ...d, quotes: d.quotes.filter((q) => q.id !== id) }));
+      const removed = journal.quotes.find((q) => q.id === id);
+      const now = Date.now();
+      mutate((d) => ({
+        ...d,
+        quotes: d.quotes.map((q) => (q.id === id ? { ...q, deletedAt: now, updatedAt: now } : q)),
+      }));
       return removed;
     },
-    [data.quotes, mutate],
+    [journal.quotes, mutate],
   );
 
   const restoreQuote = useCallback(
     (quote: Quote) => {
+      const now = Date.now();
       mutate((d) => ({
         ...d,
-        quotes: d.quotes.some((q) => q.id === quote.id) ? d.quotes : [...d.quotes, quote],
+        quotes: d.quotes.map((q) =>
+          q.id === quote.id ? { ...q, ...quote, deletedAt: undefined, updatedAt: now } : q,
+        ),
       }));
     },
     [mutate],
@@ -316,48 +371,48 @@ export function useJournal() {
     }
     const sample = sampleData();
     setHasStored(false);
-    setData({ version: 1, books: sample.books, quotes: sample.quotes, shelves: [] });
+    setJournal({ version: 1, books: sample.books, quotes: sample.quotes, shelves: [] });
   }, []);
 
   /* ---------------- Reading plan queue ---------------- */
 
   /** Adds a book to the end of the reading plan. */
   const queueBook = useCallback(
-    (bookId: string) => {
+    (id: string) => {
       mutate((d) => {
-        const queue = d.books
-          .filter((b) => typeof b.queuePosition === 'number' && b.id !== bookId)
-          .sort((a, b) => (a.queuePosition ?? 0) - (b.queuePosition ?? 0));
-        const position = queue.length;
+        if (d.books.some((b) => b.id === id && b.queuePosition !== undefined)) return d;
+        const max = d.books.reduce((m, b) => Math.max(m, b.queuePosition ?? -1), -1);
         return {
           ...d,
-          books: d.books.map((b) => (b.id === bookId ? { ...b, queuePosition: position } : b)),
+          books: d.books.map((b) =>
+            b.id === id ? { ...b, queuePosition: max + 1, updatedAt: Date.now() } : b,
+          ),
         };
       });
     },
     [mutate],
   );
 
-  /** Removes a book from the plan and closes the gap it leaves. */
   const unqueueBook = useCallback(
-    (bookId: string) => {
+    (id: string) => {
       mutate((d) => {
+        const removed = d.books.find((b) => b.id === id && b.queuePosition !== undefined);
+        if (!removed) return d;
+        // Removing a queued book must not leave a hole in the plan, or every
+        // book behind it keeps a stale position number.
         const queue = d.books
-          .filter((b) => typeof b.queuePosition === 'number')
+          .filter((b) => b.queuePosition !== undefined && !b.deletedAt)
           .sort((a, b) => (a.queuePosition ?? 0) - (b.queuePosition ?? 0));
-        const index = queue.findIndex((b) => b.id === bookId);
+        const index = queue.findIndex((b) => b.id === id);
         const reindexed = new Map(
-          reindexAfterRemoval(queue, index).map(({ id, queuePosition }) => [id, queuePosition]),
+          reindexAfterRemoval(queue, index).map(({ id: bid, queuePosition }) => [bid, queuePosition]),
         );
         return {
           ...d,
           books: d.books.map((b) => {
-            if (b.id === bookId) {
-              const { queuePosition: _removed, ...rest } = b;
-              return rest;
-            }
-            const nextPos = reindexed.get(b.id);
-            return nextPos === undefined ? b : { ...b, queuePosition: nextPos };
+            if (b.id === id) return { ...b, queuePosition: undefined, updatedAt: Date.now() };
+            const pos = reindexed.get(b.id);
+            return pos === undefined ? b : { ...b, queuePosition: pos, updatedAt: Date.now() };
           }),
         };
       });
@@ -365,25 +420,25 @@ export function useJournal() {
     [mutate],
   );
 
-  /** Moves a queued book one step up or down, swapping with its neighbour. */
   const moveQueueItem = useCallback(
-    (bookId: string, direction: 'up' | 'down') => {
+    (id: string, direction: 'up' | 'down') => {
       mutate((d) => {
         const queue = d.books
-          .filter((b) => typeof b.queuePosition === 'number')
+          .filter((b) => b.queuePosition !== undefined && !b.deletedAt)
           .sort((a, b) => (a.queuePosition ?? 0) - (b.queuePosition ?? 0));
-        const index = queue.findIndex((b) => b.id === bookId);
-        const swapWith = direction === 'up' ? index - 1 : index + 1;
-        if (index < 0 || swapWith < 0 || swapWith >= queue.length) return d;
-
-        const order = queue.map((b) => b.id);
-        [order[index], order[swapWith]] = [order[swapWith], order[index]];
-        const positions = new Map(order.map((id, i) => [id, i]));
+        const index = queue.findIndex((b) => b.id === id);
+        const target = index + (direction === 'up' ? -1 : 1);
+        if (index < 0 || target < 0 || target >= queue.length) return d;
+        const reordered = [...queue];
+        const [item] = reordered.splice(index, 1);
+        reordered.splice(target, 0, item);
+        const positions = new Map(reordered.map((b, i) => [b.id, i]));
+        const now = Date.now();
         return {
           ...d,
           books: d.books.map((b) => {
             const pos = positions.get(b.id);
-            return pos === undefined ? b : { ...b, queuePosition: pos };
+            return pos === undefined ? b : { ...b, queuePosition: pos, updatedAt: now };
           }),
         };
       });
@@ -394,13 +449,14 @@ export function useJournal() {
   /** Replaces the whole order, for drag-and-drop. */
   const reorderQueue = useCallback(
     (orderedIds: string[]) => {
+      const now = Date.now();
       mutate((d) => {
         const positions = new Map(orderedIds.map((id, index) => [id, index]));
         return {
           ...d,
           books: d.books.map((b) => {
             const pos = positions.get(b.id);
-            return pos === undefined ? b : { ...b, queuePosition: pos };
+            return pos === undefined ? b : { ...b, queuePosition: pos, updatedAt: now };
           }),
         };
       });
@@ -419,7 +475,10 @@ export function useJournal() {
   }, [data.quotes]);
 
   return {
+    /** The journal as the reader sees it: tombstones stripped. */
     data,
+    /** The stored journal, tombstones included — the sync's input. */
+    rawData: journal,
     quotesByBook,
     isDemo: !hasStored && isSample(data),
     health,
