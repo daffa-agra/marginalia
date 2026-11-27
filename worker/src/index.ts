@@ -16,6 +16,7 @@ import type { Syncable } from './sync';
 import { objectKey, presign } from './r2';
 import { isConfigured } from './r2';
 import { checkQuota, checkRate } from './quota';
+import { collectGarbage } from './gc';
 
 export interface Env {
   DB: D1Database;
@@ -476,5 +477,15 @@ export default {
       console.error('request failed', err instanceof Error ? err.stack : err);
       return json({ error: 'Something went wrong' }, 500, cors);
     }
+  },
+
+  /**
+   * The nightly tombstone collection. Runs without R2 credentials as a no-op,
+   * so the cron only earns its keep once file storage is configured.
+   */
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    const config = r2Config(env);
+    if (!config) return;
+    ctx.waitUntil(collectGarbage(env.DB, config));
   },
 };
