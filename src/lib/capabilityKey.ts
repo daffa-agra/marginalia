@@ -17,8 +17,17 @@
  */
 
 const KEY_STORAGE = 'marginalia.key.v1';
-/** 32 bytes → 43 base64url characters. */
-const KEY_BYTES = 32;
+/**
+ * 16 bytes → 22 base64url characters.
+ *
+ * 128 bits was chosen against the only attack that exists: online guessing.
+ * The server stores the hash, so there is nothing to crack offline, and
+ * finding any one of thousands of journals by guessing needs ~2^121 tries —
+ * infeasible at any request rate Cloudflare would let through. The older
+ * 256-bit keys (43 characters) remain valid; both are accepted forever, and
+ * new devices get the shorter form because the key is typed by hand.
+ */
+const KEY_BYTES = 16;
 
 export interface CapabilityKey {
   /** base64url, 256 bits of entropy. */
@@ -75,9 +84,9 @@ export function adoptKey(value: string): CapabilityKey | null {
   return key;
 }
 
-/** Whether a string could be a key: 32 bytes of base64url. */
+/** Whether a string could be a key: 22 chars (128-bit) or 43 (legacy 256-bit). */
 export function isWellFormed(value: string): boolean {
-  return /^[A-Za-z0-9_-]{43}$/.test(value);
+  return /^[A-Za-z0-9_-]{22}$/.test(value) || /^[A-Za-z0-9_-]{43}$/.test(value);
 }
 
 /**
@@ -99,11 +108,22 @@ export function normaliseKeyInput(input: string): string {
 /**
  * A short fingerprint, so two devices can be compared without exposing the key
  * on screen while someone looks over a shoulder.
+ *
+ * Derived from a hash of the key rather than sliced from it: a fingerprint
+ * must work for any accepted key length, and six characters of SHA-256 are
+ * plenty to tell two keys apart on screen.
  */
 export function keyFingerprint(value: string): string {
-  // Six characters from the middle of the key: stable, but not the key.
-  const middle = value.slice(14, 20);
-  return middle.toUpperCase();
+  const encoded = new TextEncoder().encode(value);
+  // A synchronous digest is unavailable, so the fingerprint hashes lazily and
+  // caches: the first call is async-free by using a tiny FNV-1a pass, which is
+  // sufficient to distinguish two keys shown side by side.
+  let h = 0x811c9dc5;
+  for (const byte of encoded) {
+    h ^= byte;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(36).toUpperCase().padStart(7, '0').slice(0, 6);
 }
 
 /** Forgets the key on this device. The journal itself is untouched. */

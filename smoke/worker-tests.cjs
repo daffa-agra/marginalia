@@ -93,9 +93,12 @@ console.log('✓ Worker modules compiled');
 
 /* ── keys ── */
 
-check('a well-formed key is 43 base64url characters', () => {
-  assert.strictEqual(auth.looksLikeKey('a'.repeat(43)), true);
-  assert.strictEqual(auth.looksLikeKey('a'.repeat(42)), false, 'too short');
+check('a well-formed key is 22 or 43 base64url characters', () => {
+  assert.strictEqual(auth.looksLikeKey('a'.repeat(22)), true, 'the current 128-bit generation');
+  assert.strictEqual(auth.looksLikeKey('a'.repeat(43)), true, 'legacy 256-bit keys stay valid');
+  assert.strictEqual(auth.looksLikeKey('a'.repeat(21)), false, 'too short');
+  assert.strictEqual(auth.looksLikeKey('a'.repeat(23)), false, 'between the generations');
+  assert.strictEqual(auth.looksLikeKey('a'.repeat(42)), false, 'too short for legacy');
   assert.strictEqual(auth.looksLikeKey('a'.repeat(44)), false, 'too long');
   assert.strictEqual(auth.looksLikeKey('a'.repeat(42) + '!'), false, 'illegal character');
   assert.strictEqual(auth.looksLikeKey(null), false);

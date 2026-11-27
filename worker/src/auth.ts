@@ -36,8 +36,10 @@ export function timingSafeEqual(a: string, b: string): boolean {
 
 /** Rejects anything that cannot be a key before touching the database. */
 export function looksLikeKey(value: string | null | undefined): value is string {
-  // 32 bytes of base64url.
-  return typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
+  // 22 chars of base64url (128-bit, the current generation) or 43 (the
+  // legacy 256-bit generation). Both hash to a journal; old keys never break.
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{22}$/.test(value)
+    || typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
 }
 
 /**
