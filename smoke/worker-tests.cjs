@@ -42,7 +42,8 @@ fs.writeFileSync(
       target: 'ES2022',
       module: 'CommonJS',
       moduleResolution: 'node',
-      lib: ['ES2022'],
+      // DOM supplies the `Response` type that auth.ts names in its signatures.
+      lib: ['ES2022', 'DOM'],
       strict: true,
       skipLibCheck: true,
       noEmit: false,
