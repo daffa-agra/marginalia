@@ -295,7 +295,8 @@ export default function App() {
 
       <footer className="app-footer">
         <p className="muted">
-          Kept in this browser only. {health.lastSavedAt ? <SavedLine at={health.lastSavedAt} /> : null}
+          Kept in this browser, and synced to your other devices when online.{' '}
+          {health.lastSavedAt ? <SavedLine at={health.lastSavedAt} /> : null}
         </p>
       </footer>
 

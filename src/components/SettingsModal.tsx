@@ -272,8 +272,8 @@ export function SettingsModal({
             <>
               <p className="muted settings-note">
                 About {usedMb.toFixed(1)} MB used
-                {quotaMb > 0 ? ` of roughly ${quotaMb.toFixed(0)} MB available` : ''}. Book files live
-                here so reading works offline.
+                {quotaMb > 0 ? ` of roughly ${quotaMb.toFixed(0)} MB available` : ''}. Book files are
+                cached here so reading works offline; the cloud copy is what your other devices fetch.
               </p>
               <div
                 className="progress-track settings-storage-bar"

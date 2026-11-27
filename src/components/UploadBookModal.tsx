@@ -389,8 +389,8 @@ export function UploadBookModal({
               />
             </label>
             <p className="muted dropzone-help">
-              DRM-free EPUB only. Title, author and cover are read from the book itself. The file stays
-              in this browser for now.
+              DRM-free EPUB only. Title, author and cover are read from the book itself. While online,
+              a copy is kept in your private cloud storage so your other devices can read it too.
             </p>
             {error && <InlineAlert>{error}</InlineAlert>}
           </div>

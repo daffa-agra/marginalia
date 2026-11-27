@@ -49,8 +49,8 @@ export function DataModal({
   return (
     <Modal title="Your data" onClose={onClose} returnFocusTo={returnFocusTo}>
       <p className="muted">
-        Everything lives in this browser's local storage. There is no server — export regularly to keep
-        a backup.
+        Your journal lives in this browser and syncs to your other devices through your own Cloudflare
+        backend when online. An export is still the strongest backup: it is a file you hold.
       </p>
 
       <div className="data-section">
