@@ -95,12 +95,13 @@ export function toRow(
 
   if (kind === 'positions') {
     return {
-      sql: `INSERT INTO positions (journal_id, book_id, chapter, fraction, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+      sql: `INSERT INTO positions (journal_id, book_id, chapter, fraction, updated_at, seq)
+            VALUES (?, ?, ?, ?, ?, (SELECT revision + 1 FROM journals WHERE id = ?))
             ON CONFLICT(journal_id, book_id) DO UPDATE SET
               chapter = excluded.chapter,
               fraction = excluded.fraction,
-              updated_at = excluded.updated_at
+              updated_at = excluded.updated_at,
+              seq = excluded.seq
             WHERE excluded.updated_at > positions.updated_at`,
       params: [
         journalId,
@@ -108,6 +109,7 @@ export function toRow(
         Number(record.chapter) || 0,
         Number(record.fraction) || 0,
         updatedAt,
+        journalId,
       ],
     };
   }
@@ -121,11 +123,12 @@ export function toRow(
     // row and the `updated_at` guard rejects the write. That is what happened:
     // shelves appeared to save and never came back.
     return {
-      sql: `INSERT INTO shelves (id, journal_id, name, sort_order, created_at, updated_at, deleted_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+      sql: `INSERT INTO shelves (id, journal_id, name, sort_order, created_at, updated_at, deleted_at, seq)
+            VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT revision + 1 FROM journals WHERE id = ?))
             ON CONFLICT(id, journal_id) DO UPDATE SET
               name = excluded.name, sort_order = excluded.sort_order,
-              updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
+              updated_at = excluded.updated_at, deleted_at = excluded.deleted_at,
+              seq = excluded.seq
             WHERE excluded.updated_at > shelves.updated_at`,
       params: [
         id,
@@ -135,6 +138,7 @@ export function toRow(
         Number(record.createdAt) || updatedAt,
         updatedAt,
         deletedAt,
+        journalId,
       ],
     };
   }
@@ -151,12 +155,13 @@ export function toRow(
   const updates = names.map((n) => `${n} = excluded.${n}`).join(', ');
 
   return {
-    sql: `INSERT INTO ${table} (id, journal_id, ${names.join(', ')}, data, updated_at, deleted_at)
-          VALUES (?, ?, ${placeholders}, ?, ?, ?)
+    sql: `INSERT INTO ${table} (id, journal_id, ${names.join(', ')}, data, updated_at, deleted_at, seq)
+          VALUES (?, ?, ${placeholders}, ?, ?, ?, (SELECT revision + 1 FROM journals WHERE id = ?))
           ON CONFLICT(id, journal_id) DO UPDATE SET
             ${updates}, data = excluded.data,
-            updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
+            updated_at = excluded.updated_at, deleted_at = excluded.deleted_at,
+            seq = excluded.seq
           WHERE excluded.updated_at > ${table}.updated_at`,
-    params: [id, journalId, ...Object.values(columns), JSON.stringify(record), updatedAt, deletedAt],
+    params: [id, journalId, ...Object.values(columns), JSON.stringify(record), updatedAt, deletedAt, journalId],
   };
 }

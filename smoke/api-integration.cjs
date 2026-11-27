@@ -304,7 +304,9 @@ function newKey() {
 
   const oversize = await call('/api/files/upload-url', { bookId: 'b-test', sha256: sha, size: 200 * 1024 * 1024 }, key);
   check('a book over the size cap is refused', () => {
-    assert.strictEqual(oversize.status, 400, `got ${oversize.status}`);
+    // 413 Content Too Large is the honest status for a size cap; the body
+    // still carries the human-readable reason and a retryable flag.
+    assert.strictEqual(oversize.status, 413, `got ${oversize.status}`);
   });
 
   const badHash = await call('/api/files/upload-url', { bookId: 'b-test', sha256: 'nope', size: 100 }, key);

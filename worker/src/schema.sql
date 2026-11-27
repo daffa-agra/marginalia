@@ -2,7 +2,9 @@
 -- Mirrors docs/READER-DESIGN.md §4.1. Applied with:
 --   wrangler d1 execute marginalia-v3 --remote --file=src/schema.sql
 --
--- Safe to re-run: every statement is IF NOT EXISTS.
+-- Safe to re-run: every statement is IF NOT EXISTS. An existing database is
+-- upgraded by the migrations in src/migrations instead; this file is the
+-- fresh-install shape and already includes what they add.
 
 -- One row per journal. Holds the capability key hash and sync bookkeeping.
 -- There is no user table on purpose: a journal *is* the unit of ownership, and
@@ -13,7 +15,12 @@ CREATE TABLE IF NOT EXISTS journals (
   schema_version INTEGER NOT NULL DEFAULT 3,
   revision       INTEGER NOT NULL DEFAULT 0,
   created_at     INTEGER NOT NULL,
-  last_seen_at   INTEGER NOT NULL
+  last_seen_at   INTEGER NOT NULL,
+  -- Added by migrations/003: the R2 free-tier ledger.
+  bytes_used           INTEGER NOT NULL DEFAULT 0,
+  upload_signings      INTEGER NOT NULL DEFAULT 0,
+  upload_window_start  INTEGER NOT NULL DEFAULT 0,
+  gc_at                INTEGER
 );
 
 -- The key hash must be unique: it is how a journal is found, and the
@@ -34,6 +41,10 @@ CREATE TABLE IF NOT EXISTS shelves (
   created_at  INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL,
   deleted_at  INTEGER,
+  -- Set to the journal's revision at write time. `updated_at` is a client
+  -- clock and cannot order a server-side incremental sync; `seq` can.
+  -- See migrations/004.
+  seq         INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (id, journal_id),
   FOREIGN KEY (journal_id) REFERENCES journals(id) ON DELETE CASCADE
 );
@@ -52,6 +63,7 @@ CREATE TABLE IF NOT EXISTS books (
   data        TEXT NOT NULL,               -- JSON: the client Book record
   updated_at  INTEGER NOT NULL,
   deleted_at  INTEGER,
+  seq         INTEGER NOT NULL DEFAULT 1,  -- see migrations/004
   PRIMARY KEY (id, journal_id),
   FOREIGN KEY (journal_id) REFERENCES journals(id) ON DELETE CASCADE,
   FOREIGN KEY (shelf_id) REFERENCES shelves(id) ON DELETE SET NULL
@@ -66,6 +78,7 @@ CREATE TABLE IF NOT EXISTS quotes (
   data        TEXT NOT NULL,               -- JSON: text, note, anchor, percent
   updated_at  INTEGER NOT NULL,
   deleted_at  INTEGER,
+  seq         INTEGER NOT NULL DEFAULT 1,  -- see migrations/004
   PRIMARY KEY (id, journal_id),
   FOREIGN KEY (journal_id) REFERENCES journals(id) ON DELETE CASCADE
 );
@@ -78,6 +91,7 @@ CREATE TABLE IF NOT EXISTS positions (
   chapter     INTEGER NOT NULL,
   fraction    REAL NOT NULL,
   updated_at  INTEGER NOT NULL,
+  seq         INTEGER NOT NULL DEFAULT 1,  -- see migrations/004
   PRIMARY KEY (journal_id, book_id),
   FOREIGN KEY (journal_id) REFERENCES journals(id) ON DELETE CASCADE
 );
@@ -89,3 +103,19 @@ CREATE INDEX IF NOT EXISTS idx_quotes_journal  ON quotes(journal_id, updated_at)
 CREATE INDEX IF NOT EXISTS idx_quotes_book     ON quotes(book_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_shelves_journal ON shelves(journal_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_positions_journal ON positions(journal_id, updated_at);
+
+-- The R2 ledger (migrations/003): one row per book file in the bucket.
+-- `delete_after` marks a deleted book's bytes for the nightly GC pass, so a
+-- delete can stay undoable for a week without stranding storage.
+CREATE TABLE IF NOT EXISTS book_files (
+  journal_id   TEXT NOT NULL,
+  book_id      TEXT NOT NULL,
+  sha256       TEXT NOT NULL,
+  size         INTEGER NOT NULL,
+  created_at   INTEGER NOT NULL,
+  delete_after INTEGER,
+  PRIMARY KEY (journal_id, book_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_book_files_gc ON book_files(delete_after);
+CREATE INDEX IF NOT EXISTS idx_book_files_journal ON book_files(journal_id);

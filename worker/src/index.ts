@@ -234,48 +234,59 @@ async function handleSync(request: Request, env: Env, cors: Record<string, strin
     }
   }
 
-  // One revision bump per sync, so `since` is a single number the client tracks.
-  const revision = journal.revision + 1;
-  statements.push(env.DB.prepare('UPDATE journals SET revision = ? WHERE id = ?').bind(revision, journal.id));
-
-  if (statements.length > 0) {
-    // A D1 batch is one transaction: either the whole sync lands or none of it.
-    await env.DB.batch(statements);
-  }
+  //
+  // The batch below is one transaction: revision bump, the upserts (each stamping
+  // itself with that same new revision as its `seq`), and the read-back. Running
+  // the read-back inside the transaction is what makes `since` sound — rows a
+  // concurrent sync writes afterwards carry a higher seq and arrive next time.
+  const bump = env.DB.prepare(
+    'UPDATE journals SET revision = revision + 1 WHERE id = ? RETURNING revision',
+  ).bind(journal.id);
 
   // Everything changed since the client's last revision, tombstones included.
   //
-  // The `since` filter is on `updated_at`, which is the field the client tracks.
-  // It must be applied consistently: filtering books but not quotes meant a
-  // client that had already seen a quote was handed it again on every sync.
-  const out = {
-    books: await env.DB.prepare(
-      'SELECT data, deleted_at FROM books WHERE journal_id = ? AND updated_at > ?',
-    ).bind(journal.id, since).all<{ data: string; deleted_at: number | null }>(),
-    quotes: await env.DB.prepare(
-      'SELECT data, deleted_at FROM quotes WHERE journal_id = ? AND updated_at > ?',
-    ).bind(journal.id, since).all<{ data: string; deleted_at: number | null }>(),
-    shelves: await env.DB.prepare(
-      'SELECT id, name, sort_order, created_at, updated_at, deleted_at FROM shelves WHERE journal_id = ? AND updated_at > ?',
-    ).bind(journal.id, since).all(),
-    positions: await env.DB.prepare(
-      'SELECT book_id, chapter, fraction, updated_at FROM positions WHERE journal_id = ? AND updated_at > ?',
-    ).bind(journal.id, since).all(),
-  };
+  // The filter is on `seq`, not `updated_at`: a record's timestamp is whatever a
+  // client's clock said, while `since` is this journal's revision counter.
+  // Comparing the two is what re-echoed every quote on every sync.
+  const readBack = [
+    env.DB.prepare(
+      'SELECT data, deleted_at FROM books WHERE journal_id = ? AND seq > ?',
+    ).bind(journal.id, since),
+    env.DB.prepare(
+      'SELECT data, deleted_at FROM quotes WHERE journal_id = ? AND seq > ?',
+    ).bind(journal.id, since),
+    env.DB.prepare(
+      'SELECT id, name, sort_order, created_at, updated_at, deleted_at FROM shelves WHERE journal_id = ? AND seq > ?',
+    ).bind(journal.id, since),
+    env.DB.prepare(
+      'SELECT book_id, chapter, fraction, updated_at FROM positions WHERE journal_id = ? AND seq > ?',
+    ).bind(journal.id, since),
+  ];
+
+  const batched = await env.DB.batch([...statements, bump, ...readBack]);
+
+  const bumped = batched[statements.length] as D1Result<{ revision: number }> | undefined;
+  const revision = bumped?.results?.[0]?.revision ?? journal.revision + 1;
+  const [outBooks, outQuotes, outShelves, outPositions] = batched.slice(statements.length + 1) as [
+    D1Result<{ data: string; deleted_at: number | null }>,
+    D1Result<{ data: string; deleted_at: number | null }>,
+    D1Result<Record<string, unknown>>,
+    D1Result<Record<string, unknown>>,
+  ];
 
   return json(
     {
       revision,
       changes: {
-        books: (out.books.results ?? []).map((r) => ({
+        books: (outBooks.results ?? []).map((r) => ({
           ...JSON.parse(r.data),
           ...(r.deleted_at ? { deletedAt: r.deleted_at } : {}),
         })),
-        quotes: (out.quotes.results ?? []).map((r) => ({
+        quotes: (outQuotes.results ?? []).map((r) => ({
           ...JSON.parse(r.data),
           ...(r.deleted_at ? { deletedAt: r.deleted_at } : {}),
         })),
-        shelves: (out.shelves.results ?? []).map((r: Record<string, unknown>) => ({
+        shelves: (outShelves.results ?? []).map((r: Record<string, unknown>) => ({
           id: r.id,
           name: r.name,
           sortOrder: r.sort_order,
@@ -283,7 +294,7 @@ async function handleSync(request: Request, env: Env, cors: Record<string, strin
           updatedAt: r.updated_at,
           deletedAt: r.deleted_at ?? undefined,
         })),
-        positions: (out.positions.results ?? []).map((r: Record<string, unknown>) => ({
+        positions: (outPositions.results ?? []).map((r: Record<string, unknown>) => ({
           id: r.book_id,
           chapter: r.chapter,
           fraction: r.fraction,
