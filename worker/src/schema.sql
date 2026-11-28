@@ -7,8 +7,9 @@
 -- fresh-install shape and already includes what they add.
 
 -- One row per journal. Holds the capability key hash and sync bookkeeping.
--- There is no user table on purpose: a journal *is* the unit of ownership, and
--- the key hash is its only credential.
+-- A journal is the unit of ownership: it is named either by a capability key
+-- (the original model, still valid) or by a signed-in Google account
+-- (migrations/005), which sets `user_id`.
 CREATE TABLE IF NOT EXISTS journals (
   id             TEXT PRIMARY KEY,          -- public, opaque
   key_hash       TEXT NOT NULL,             -- SHA-256 hex of the capability key
@@ -20,7 +21,10 @@ CREATE TABLE IF NOT EXISTS journals (
   bytes_used           INTEGER NOT NULL DEFAULT 0,
   upload_signings      INTEGER NOT NULL DEFAULT 0,
   upload_window_start  INTEGER NOT NULL DEFAULT 0,
-  gc_at                INTEGER
+  gc_at                INTEGER,
+  -- Added by migrations/005: the signed-in owner, when the journal belongs to
+  -- a Google account rather than a bare key.
+  user_id              TEXT
 );
 
 -- The key hash must be unique: it is how a journal is found, and the
@@ -29,6 +33,39 @@ CREATE TABLE IF NOT EXISTS journals (
 -- earlier schema that lacked it, and `CREATE TABLE IF NOT EXISTS` would silently
 -- keep the old definition.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_journals_key_hash ON journals(key_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_journals_user ON journals(user_id) WHERE user_id IS NOT NULL;
+
+-- Signed-in readers (migrations/005). The Google subject is the primary key
+-- because it is immutable; email and profile fields are display data.
+CREATE TABLE IF NOT EXISTS users (
+  id            TEXT PRIMARY KEY,     -- Google subject (`sub`), immutable
+  email         TEXT,
+  name          TEXT,
+  picture       TEXT,
+  created_at    INTEGER NOT NULL,
+  last_seen_at  INTEGER NOT NULL
+);
+
+-- Server-side half of a login. Only `SHA-256(token)` is stored.
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash  TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
+
+-- Carries the PKCE verifier between /api/auth/start and /api/auth/callback.
+CREATE TABLE IF NOT EXISTS oauth_states (
+  state          TEXT PRIMARY KEY,
+  code_verifier  TEXT NOT NULL,
+  nonce          TEXT NOT NULL,
+  redirect_uri   TEXT NOT NULL,
+  created_at     INTEGER NOT NULL
+);
 
 -- Shelves. updated_at/deleted_at make renames and deletions sync like any
 -- other record; the manual order is part of the record. Composite primary key

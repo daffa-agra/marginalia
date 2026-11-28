@@ -14,6 +14,7 @@ import {
 import { apiBase, loadSyncState, pendingCount, runSync, resolveConflict } from '../lib/syncEngine';
 import type { SyncState } from '../lib/syncEngine';
 import { estimateStorage, requestPersistentStorage } from '../lib/bookFiles';
+import { currentSession, signInWithGoogle, subscribeSession, signOut } from '../lib/auth';
 import type { useToasts } from '../lib/toasts';
 
 /**
@@ -40,6 +41,8 @@ export function SettingsModal({
   notify: ReturnType<typeof useToasts>['notify'];
 }) {
   const [state, setState] = useState<SyncState>(() => loadSyncState());
+  const [session, setSession] = useState(() => currentSession());
+  const [signingIn, setSigningIn] = useState(false);
   const [key, setKey] = useState(() => loadOrCreateKey());
   const [linkInput, setLinkInput] = useState('');
   const [linkError, setLinkError] = useState('');
@@ -56,6 +59,10 @@ export function SettingsModal({
       setPersisted(est.persisted);
     })();
   }, []);
+
+  // The session lives outside React's tree; this keeps the account section
+  // honest when a sign-in completes in another tab or expires under us.
+  useEffect(() => subscribeSession(() => setSession(currentSession())), []);
 
   const syncNow = useCallback(async () => {
     setBusy(true);
@@ -117,9 +124,82 @@ export function SettingsModal({
   const usedMb = storage ? storage.usage / 1024 / 1024 : 0;
   const quotaMb = storage ? storage.quota / 1024 / 1024 : 0;
 
+  const startSignIn = useCallback(async () => {
+    setSigningIn(true);
+    try {
+      const result = await signInWithGoogle();
+      // On success this page is already on its way to Google.
+      if (!result.ok) notify(result.error ?? 'Could not start sign-in', { tone: 'danger' });
+    } finally {
+      setSigningIn(false);
+    }
+  }, [notify]);
+
+  const leave = useCallback(async () => {
+    await signOut();
+    notify('Signed out on this device. Your journal stays, here and in the cloud.');
+  }, [notify]);
+
   return (
     <Modal title="Settings" onClose={onClose}>
       <div className="settings-body">
+        {/* ── the account ── */}
+        <section className="settings-group" aria-labelledby="settings-account">
+          <h3 id="settings-account">Account</h3>
+          {session ? (
+            <>
+              <div className="settings-account">
+                {session.user.picture ? (
+                  <img
+                    className="settings-avatar"
+                    src={session.user.picture}
+                    alt=""
+                    width={40}
+                    height={40}
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <span className="settings-avatar settings-avatar-fallback" aria-hidden="true">
+                    {(session.user.name ?? session.user.email ?? '?').charAt(0).toUpperCase()}
+                  </span>
+                )}
+                <div>
+                  <strong>{session.user.name ?? 'Signed in'}</strong>
+                  {session.user.email && <span className="muted">{session.user.email}</span>}
+                </div>
+              </div>
+              <p className="muted settings-note">
+                Your journal follows this account, the way Google Play Books does: sign in on any
+                device and your books and margins are there. Book files are fetched once and kept
+                on the device, so reading works offline.
+              </p>
+              <div className="settings-actions">
+                <button type="button" className="btn btn-small btn-quiet" onClick={() => void leave()}>
+                  Sign out
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="muted settings-note">
+                Sign in with a Google account and this journal follows it across devices — like
+                Google Play Books. Books are stored online and cached on each device once read.
+                No account? The key below still works exactly as before.
+              </p>
+              <div className="settings-actions">
+                <button
+                  type="button"
+                  className="btn btn-primary btn-small"
+                  onClick={() => void startSignIn()}
+                  disabled={signingIn}
+                >
+                  {signingIn ? 'Opening Google…' : 'Sign in with Google'}
+                </button>
+              </div>
+            </>
+          )}
+        </section>
+
         {/* ── where the writing lives ── */}
         <section className="settings-group" aria-labelledby="settings-where">
           <h3 id="settings-where">Where your journal lives</h3>
@@ -190,9 +270,9 @@ export function SettingsModal({
         <section className="settings-group" aria-labelledby="settings-key">
           <h3 id="settings-key">Your key</h3>
           <p className="muted settings-note">
-            There is no password. This key <em>is</em> the account: anyone who has it can read and
-            write this journal, so keep it somewhere safe. Losing it means this journal cannot be
-            reached from another device — export a backup as well.
+            This key <em>is</em> this journal for any device that has not signed in: anyone who
+            has it can read and write here, so keep it somewhere safe. Export a backup as well —
+            the key reaches a journal, it is not one.
           </p>
           <div className="settings-key">
             <code aria-label="Your journal key">{formatKeyForDisplay(key.value)}</code>

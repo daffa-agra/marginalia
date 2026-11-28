@@ -140,6 +140,20 @@ export async function collectGarbage(
   return result;
 }
 
+/**
+ * Clears the auth residue: expired sessions and abandoned sign-in attempts.
+ *
+ * Neither holds bytes, so this is hygiene rather than cost control — but a
+ * session table that only ever grows is a table that outlives its readers.
+ * Runs in the same nightly pass as the object collection.
+ */
+export async function collectSessions(db: D1Database, now = Date.now()): Promise<void> {
+  await db.batch([
+    db.prepare('DELETE FROM sessions WHERE expires_at <= ?').bind(now),
+    db.prepare('DELETE FROM oauth_states WHERE created_at < ?').bind(now - 60 * 60 * 1000),
+  ]);
+}
+
 /** Deletes one object by its exact key. No listing, one Class A operation. */
 async function deleteObject(
   config: R2Config,

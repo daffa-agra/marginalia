@@ -9,12 +9,17 @@
  *
  * That constraint shapes the whole module:
  *
- *   - every request carries the capability key, never a session
+ *   - every request carries a credential: the signed-in session token, or the
+ *     capability key when this device has not signed in
  *   - a failed request is a *queued* change, not a lost one
  *   - the server only signs R2 URLs; book bytes never pass through it
  */
 
 import { loadOrCreateKey } from './capabilityKey';
+import { currentSession, writeSession } from './session';
+import type { AuthUser } from './session';
+
+export type { AuthUser } from './session';
 
 /**
  * Where the API lives.
@@ -50,9 +55,14 @@ function offlineError(message = 'No connection'): ApiResult<never> {
 async function request<T>(
   path: string,
   body: unknown,
-  options: { method?: string; signal?: AbortSignal } = {},
+  options: { method?: string; signal?: AbortSignal; authToken?: string } = {},
 ): Promise<ApiResult<T>> {
   const key = loadOrCreateKey();
+  // A signed-in session outranks the key: the account is the identity. The key
+  // still rides along so a request works while signed out, and so the server
+  // can always fall back to the legacy journal.
+  const session = currentSession();
+  const bearer = options.authToken ?? session?.token;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   // Let the caller cancel as well as the timeout.
@@ -64,6 +74,7 @@ async function request<T>(
       method: options.method ?? 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
         'X-Journal-Key': key.value,
       },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -71,6 +82,10 @@ async function request<T>(
     });
 
     if (!response.ok) {
+      // The server has refused this session: it expired, it was revoked, or it
+      // was signed out elsewhere. Dropping it here means the UI shows
+      // signed-out immediately instead of sending a dead token on every call.
+      if (response.status === 401 && bearer && !options.authToken) writeSession(null);
       // A JSON error body is the API speaking; a non-JSON one is an edge proxy.
       let message = `Request failed (${response.status})`;
       try {
@@ -106,6 +121,42 @@ export function hello(signal?: AbortSignal): Promise<ApiResult<HelloResponse>> {
   return request<HelloResponse>('/api/hello', {}, { signal });
 }
 
+/* ── sign-in ── */
+
+/** The Worker-minted consent-screen URL to redirect the browser to. */
+export interface AuthStartResponse {
+  authorizeUrl: string;
+}
+
+/** Asks the Worker to start a Google sign-in from this app. */
+export function authStart(
+  payload: { redirectUri: string },
+  signal?: AbortSignal,
+): Promise<ApiResult<AuthStartResponse>> {
+  return request<AuthStartResponse>('/api/auth/start', payload, { signal });
+}
+
+/** The signed-in account, as the session reports it. */
+export interface AuthCallbackResponse {
+  token: string;
+  /** Epoch ms after which this token stops working. */
+  expiresAt: number;
+  user: AuthUser;
+}
+
+/** Swaps Google's redirect (code + state) for a session, on the Worker. */
+export function authCallback(
+  payload: { code: string; state: string; redirectUri: string },
+  signal?: AbortSignal,
+): Promise<ApiResult<AuthCallbackResponse>> {
+  return request<AuthCallbackResponse>('/api/auth/callback', payload, { signal });
+}
+
+/** Asks the server to forget a session. Best-effort; never throws. */
+export function authLogout(token: string, signal?: AbortSignal): Promise<ApiResult<{ ok: boolean }>> {
+  return request<{ ok: boolean }>('/api/auth/logout', {}, { signal, authToken: token });
+}
+
 /**
  * A record on the wire.
  *
@@ -135,6 +186,8 @@ export interface SyncRequest {
 }
 
 export interface SyncResponse {
+  /** Which journal answered — a change here means the counters must reset. */
+  journalId: string;
   revision: number;
   changes: SyncChanges;
   /** Records edited on two devices within the same millisecond. */

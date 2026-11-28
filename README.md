@@ -15,12 +15,15 @@ A personal book journal and EPUB reader — your shelves, notes in the margins, 
 - **Quotes & notes** — collect passages with your own annotations; masonry layout, filter, search, edit, copy.
 - **Reading life** — books finished per month, pages read, genres, average rating, and your top shelf.
 - **Play Books import** — drop in the notes file exported from Google Play Books, preview it, and attach highlights to books — with duplicate protection.
+- **Your account, your books** — sign in with Google and the journal follows the account across devices, like Play Books: books stored online, cached on each device once read. A key-only mode without any account remains available.
 - **Undo and honest feedback** — deleting a book or a quote can be undone; failed saves surface immediately instead of silently losing work.
 - **Your data, exported** — full JSON backups, Markdown journals and CSVs, with or without book files.
 
 ## Sync, briefly
 
-The journal syncs across devices through a Cloudflare Worker backed by D1, with EPUB bytes in R2 — no account, no login. Your browser holds a **capability key**: whoever holds the key has access, and it behaves like a bookmark URL, not a password. The server stores only `SHA-256(key)`.
+The journal syncs across devices through a Cloudflare Worker backed by D1, with EPUB bytes in R2 — the way Google Play Books works: **sign in with a Google account** and your library, margins and reading positions follow it to any device. Book files live online and are cached on each device once read. Sessions slide for six months of use, and the server stores only `SHA-256(token)`.
+
+No account? The original **capability key** still works exactly as before: your browser generates it, whoever holds the key has access, it behaves like a bookmark URL rather than a password, and the server stores only `SHA-256(key)`. Signing in on a device that already has a journal moves it to the account; a journal that only ever lived behind a key is still reachable by that key, or through a backup.
 
 - **Metadata** — books, quotes, shelves and reading positions sync automatically when you are online; offline, changes queue and go out on the next sync. There is no server UI: the app is the only way in.
 - **Book files** — when you add an EPUB, a copy is uploaded to the private bucket in the background; if the upload fails or the tab closes first, it is queued and retried until it lands, exactly like the journal's own changes. Open the same book on another device and the reader fetches it once, then keeps it locally. If a book is not in this browser and cannot be fetched, the reader says so instead of pretending.

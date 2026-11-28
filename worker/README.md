@@ -1,14 +1,18 @@
 # Marginalia API
 
 The Cloudflare Worker behind [Marginalia](https://books.daffagra.my.id). It does
-three things, and deliberately no more:
+a few things, and deliberately no more:
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/hello` | Create-or-fetch the journal for a capability key. Idempotent. |
+| `POST /api/hello` | Create-or-fetch the journal for a session or a capability key. Idempotent. |
 | `POST /api/sync` | Push local changes, receive remote ones. One endpoint, not twelve. |
 | `POST /api/files/upload-url` | Sign a 5-minute R2 `PUT` for one EPUB. |
 | `POST /api/files/read-url` | Sign a 5-minute R2 `GET` for one EPUB. |
+| `POST /api/auth/start` | Begin a Google sign-in: mints state + PKCE, returns the consent URL. |
+| `POST /api/auth/callback` | Swaps Google's `?code` for an id_token, then for a session. |
+| `GET /api/auth/session` | Who the bearer token belongs to. |
+| `POST /api/auth/logout` | Delete the session for the presented token. Idempotent. |
 
 **The Worker never touches book bytes.** Its free tier allows 10 ms of CPU per
 request; a 5 MB body is orders of magnitude past that. So it signs a URL and gets
@@ -16,15 +20,33 @@ out of the way, and the browser talks to R2 directly.
 
 ## Access model
 
-There is no login. The browser generates a 256-bit key on first run and sends it
-as `X-Journal-Key`. The Worker stores only `SHA-256(key)` and compares in constant
-time. No account, no email, no password — and the honest consequence: whoever
-holds the key has access. It behaves like a bookmark URL, not a password. The key
-is shown in Settings so it can be entered on a second device, and it can be
-rotated.
+A journal is named by one of two credentials, and only ever a hash of either is
+stored:
 
-Every query is scoped by the journal id resolved from that key. **No endpoint
-takes a journal id from the request body.**
+- **A Google session** — the model Google Play Books uses. `POST /api/auth/start`
+  mints a `state`, a PKCE verifier and a nonce into D1 and returns the consent
+  URL; Google returns to the app's own origin root, and the app posts `code` +
+  `state` back. The Worker exchanges the code (the client secret never leaves
+  the server), checks the id_token's issuer, audience, expiry and nonce, and
+  issues an opaque session token — 32 random bytes, `SHA-256(token)` at rest,
+  six months, sliding on use. The account's Google `sub` — immutable, unlike an
+  email — is the user id, and it owns exactly one journal.
+- **A capability key** — the original model, still fully valid. The browser
+  generates a 256-bit key on first run and sends it as `X-Journal-Key`. The
+  Worker stores only `SHA-256(key)` and compares in constant time. No account,
+  no email, no password — and the honest consequence: whoever holds the key has
+  access. It behaves like a bookmark URL, not a password.
+
+Every query is scoped by the journal id resolved from the session or the key.
+**No endpoint takes a journal id from the request body.** A journal created for
+an account carries a random placeholder credential in `key_hash` purely to
+satisfy the schema; it is never given out, so the session is the only way in.
+Existing key journals keep working unchanged; a device that signs in moves to
+its account journal, and the sync engine detects the journal change and resets
+its push/pull counters so nothing is skipped in the move.
+
+Expired sessions and abandoned sign-in attempts are cleared by the nightly cron
+alongside the object collection.
 
 ## Deploying
 
@@ -40,6 +62,13 @@ npx wrangler secret put R2_ACCOUNT_ID
 npx wrangler secret put R2_ACCESS_KEY_ID
 npx wrangler secret put R2_SECRET_ACCESS_KEY
 npx wrangler secret put JOURNAL_PEPPER        # optional but recommended
+npx wrangler secret put GOOGLE_CLIENT_ID      # optional; enables Google sign-in
+npx wrangler secret put GOOGLE_CLIENT_SECRET
+
+# One-time: apply migrations/005-accounts.sql the same way as the schema
+# (Google sign-in; older databases upgrade, fresh ones already ship it via
+# schema.sql):
+npx wrangler d1 execute marginalia-v3 --remote --file=src/migrations/005-accounts.sql
 
 npx wrangler deploy
 ```
@@ -49,6 +78,19 @@ npx wrangler deploy
 - `DB` → D1 `marginalia-v3` (`a72e3d16-d133-492d-9145-120579b837f3`)
 - `BOOKS` → R2 `marginalia-books`
 - route `api.books.daffagra.my.id`
+
+### Google sign-in setup
+
+One-time, in [Google Cloud Console](https://console.cloud.google.com/apis/credentials):
+create an **OAuth client ID** of type *Web application* with
+
+- *Authorized JavaScript origin*: `https://books.daffagra.my.id`
+- *Authorized redirect URI*: `https://books.daffagra.my.id/` (the app's root,
+  exactly — the Worker refuses to start a sign-in toward any other address)
+
+Then put the client ID and secret into the Worker secrets above. Without them
+`/api/auth/start` answers 503 and the app stays on the capability key, so this
+rollout can be deployed before the Google side is set up.
 
 ### Local development
 
@@ -90,7 +132,7 @@ client's `src/lib/merge.ts`; both are unit-tested.
 
 ```bash
 npx tsc --noEmit -p tsconfig.json   # types
-node ../smoke/worker-tests.cjs      # 22 unit tests: keys, merge, rows, schema
+node ../smoke/worker-tests.cjs      # unit tests: keys, sessions, sign-in, merge, rows, schema
 ```
 
 The unit tests need no network and no D1 bindings, so they run in CI.

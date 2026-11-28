@@ -15,6 +15,8 @@ import { ToastRegion, useToasts } from './lib/toasts';
 import { listPendingDeletes, removePendingDelete } from './lib/pendingDeletes';
 import { useAutoSync } from './lib/useAutoSync';
 import { useBookUploads } from './lib/useBookUploads';
+import { completeSignInFromRedirect } from './lib/auth';
+import { runSync } from './lib/syncEngine';
 import { cx } from './lib/utils';
 
 type View = 'library' | 'plan' | 'quotes' | 'stats';
@@ -85,6 +87,26 @@ export default function App() {
   useEffect(() => {
     document.title = openBookId ? 'Book — Marginalia' : TITLES[view];
   }, [view, openBookId]);
+
+  // A Google sign-in lands back on this page with ?code and ?state in the
+  // address. Turning those into a session is boot work, and the pull right
+  // after it is what fills an empty device with the account's journal — the
+  // auto-sync hooks skip a device with nothing to push.
+  useEffect(() => {
+    void (async () => {
+      const done = await completeSignInFromRedirect();
+      if (!done) return;
+      if (done.ok) {
+        notify(`Signed in as ${done.session.user.name ?? done.session.user.email ?? 'you'}`);
+        const outcome = await runSync(store.rawData, undefined);
+        if (outcome.data) store.replaceAll(outcome.data);
+      } else {
+        notify(done.error, { tone: 'danger' });
+      }
+    })();
+    // Runs once, on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // A delete interrupted by a refresh must still be undoable. Anything whose
   // window is still open gets its undo offered again on load.

@@ -32,6 +32,8 @@ const DEVICE_STORAGE = 'marginalia.device.v1';
 export type SyncPhase = 'idle' | 'syncing' | 'offline' | 'error';
 
 export interface SyncState {
+  /** The journal these counters belong to. A change resets both. */
+  journalId?: string;
   /** Server revision already absorbed. 0 means "never synced". */
   revision: number;
   /**
@@ -57,6 +59,7 @@ function readState(): SyncState {
     if (!raw) return empty;
     const parsed = JSON.parse(raw) as Partial<SyncState>;
     return {
+      journalId: typeof parsed.journalId === 'string' ? parsed.journalId : undefined,
       revision: typeof parsed.revision === 'number' ? parsed.revision : 0,
       pushedAt: typeof parsed.pushedAt === 'number' ? parsed.pushedAt : 0,
       lastSyncAt: parsed.lastSyncAt,
@@ -74,6 +77,7 @@ function writeState(state: SyncState): void {
     localStorage.setItem(
       STATE_STORAGE,
       JSON.stringify({
+        journalId: state.journalId,
         revision: state.revision,
         pushedAt: state.pushedAt,
         lastSyncAt: state.lastSyncAt,
@@ -190,29 +194,46 @@ export async function runSync(
   const syncing: SyncState = { ...current, phase: 'syncing', message: undefined };
   onState?.(syncing);
 
-  // A journal that has never been registered gets 401 from /api/sync forever:
-  // the endpoint resolves the journal without creating it. /api/hello IS the
-  // registrar, so a first-ever sync (pushedAt 0, revision 0) says hello first.
-  // Cheap — one extra request on the very first sync only.
-  if (current.revision === 0 && current.pushedAt === 0) {
-    await hello();
+  // Which journal is at the other end? /api/hello answers cheaply, and its
+  // answer decides the counters. If the journal changed — a sign-in moving
+  // this device from its key journal to its account journal, or a key adopted
+  // from another browser — the stored counters belong to the OLD journal: a
+  // stale `pushedAt` would hide records the new journal has never seen, and a
+  // stale `revision` would filter the pull against the wrong sequence. Both
+  // reset, and merge sorts out whatever the two journals shared.
+  let journalId = current.journalId;
+  let revision = current.revision;
+  let pushedAt = current.pushedAt;
+  const greeted = await hello();
+  if (greeted.ok) {
+    journalId = greeted.data.journalId;
+    if (greeted.data.journalId !== current.journalId) {
+      revision = 0;
+      pushedAt = 0;
+    }
+  } else if (current.revision === 0 && current.pushedAt === 0) {
+    // A journal that has never been registered gets 401 from /api/sync forever:
+    // the endpoint resolves the journal without creating it, and /api/hello is
+    // the registrar. The sync below still runs — when hello failed transiently
+    // but the path is fine, a journal a signed-in session just created is
+    // reachable all the same — but the odds are it fails with the same reason.
   }
 
   const local = toChanges(data);
   // The push filter runs in the client-clock domain: `pushedAt` is the newest
   // timestamp this device has already sent, so nothing is re-pushed forever,
   // and nothing owed is skipped. Tombstones are records like any other.
-  const books = pendingOf(local.books, current.pushedAt);
-  const quotes = pendingOf(local.quotes, current.pushedAt);
-  const shelves = pendingOf(local.shelves, current.pushedAt);
-  const positions = pendingOf(local.positions, current.pushedAt);
+  const books = pendingOf(local.books, pushedAt);
+  const quotes = pendingOf(local.quotes, pushedAt);
+  const shelves = pendingOf(local.shelves, pushedAt);
+  const positions = pendingOf(local.positions, pushedAt);
   const pushing = [...books, ...quotes, ...shelves, ...positions].reduce(
     (max, r) => Math.max(max, r.updatedAt),
-    current.pushedAt,
+    pushedAt,
   );
 
   const result = await sync({
-    since: current.revision,
+    since: revision,
     changes: { books, quotes, shelves, positions },
     deviceId: current.deviceId,
   });
@@ -232,6 +253,7 @@ export async function runSync(
   const merged = mergeJournals(local as unknown as MergeInputShape, remote);
 
   const next: SyncState = {
+    journalId: result.data.journalId ?? journalId,
     revision: result.data.revision,
     pushedAt: pushing,
     lastSyncAt: Date.now(),
