@@ -1,13 +1,18 @@
 /**
  * Authentication.
  *
- * There are no accounts. A journal is identified by a 256-bit capability key
- * that the browser generates; the server stores only its SHA-256 hash and
- * compares in constant time. Whoever holds the key has access to that journal —
- * the same trade a bookmark URL makes — which is why the Worker also rate-limits
- * (see `rateLimit`) and why the key can be rotated.
+ * Two credentials name a journal, and both are compared the same way: the
+ * server stores only a SHA-256 hash and compares in constant time.
  *
- * Nothing here trusts the client. The key names a journal; every other query is
+ *  - **Session token.** A signed-in Google account (see `oauth.ts`), the way
+ *    Google Play Books ties a library to a reader rather than to a device.
+ *    The token is minted at sign-in, expires, and names the journal through
+ *    the account's user id.
+ *  - **Capability key.** The original model: a key the browser generates, and
+ *    whoever holds it has access — the same trade a bookmark URL makes. It
+ *    remains valid so existing devices keep syncing unchanged.
+ *
+ * Nothing here trusts the client. Either credential names the journal; every other query is
  * scoped by the journal id resolved from that key, never by an id in the body.
  */
 
@@ -40,6 +45,20 @@ export function looksLikeKey(value: string | null | undefined): value is string 
   // legacy 256-bit generation). Both hash to a journal; old keys never break.
   return typeof value === 'string' && /^[A-Za-z0-9_-]{22}$/.test(value)
     || typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
+}
+
+/**
+ * The bearer token of a signed-in session, from the Authorization header.
+ *
+ * A session token is a 32-byte random value (43 base64url characters), the
+ * same shape as the legacy 256-bit key. Like the key, only its hash is stored;
+ * unlike the key it is minted by the server at sign-in and expires.
+ */
+export function bearerToken(request: Request): string | null {
+  const header = request.headers.get('Authorization');
+  if (!header) return null;
+  const match = /^Bearer\s+([A-Za-z0-9_-]{43})$/.exec(header.trim());
+  return match ? match[1] : null;
 }
 
 /**

@@ -1,22 +1,33 @@
 /**
  * The API router.
  *
- * Four endpoints, deliberately: one sync, two for files, one to register a key.
- * A REST surface per entity would mean twelve endpoints that each need their own
- * auth, validation and scoping, and twelve chances to forget the `journal_id`
- * filter. One sync endpoint can be made correct once.
+ * One sync endpoint, two file endpoints, one registrar, and the Google
+ * sign-in pair. A REST surface per entity would mean twelve endpoints that
+ * each need their own auth, validation and scoping, and twelve chances to
+ * forget the `journal_id` filter. One sync endpoint can be made correct once.
  *
- * Everything is scoped by the journal resolved from the key. No endpoint accepts
- * a journal id from the body.
+ * Everything is scoped by the journal resolved from the session token or the
+ * capability key. No endpoint accepts a journal id from the body.
  */
 
-import { hashKey, json, looksLikeKey, timingSafeEqual, unauthorised } from './auth';
+import { hashKey, json, looksLikeKey, timingSafeEqual, unauthorised, bearerToken } from './auth';
+import {
+  buildAuthorizeUrl,
+  decodeIdToken,
+  isAllowedRedirect,
+  OAUTH_STATE_TTL_MS,
+  pkceChallenge,
+  profileOf,
+  randomToken,
+  SESSION_TTL_MS,
+  validateClaims,
+} from './oauth';
 import { mergeCollection, toRow } from './sync';
 import type { Syncable } from './sync';
 import { objectKey, presign } from './r2';
 import { isConfigured } from './r2';
 import { checkQuota, checkRate } from './quota';
-import { collectGarbage } from './gc';
+import { collectGarbage, collectSessions } from './gc';
 
 export interface Env {
   DB: D1Database;
@@ -27,6 +38,9 @@ export interface Env {
   R2_ACCESS_KEY_ID: string;
   R2_SECRET_ACCESS_KEY: string;
   R2_BUCKET: string;
+  /** Google sign-in. Without these, /api/auth/* answers 503 and the app stays on the key. */
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
   /** Allowed browser origins, comma separated. */
   ALLOWED_ORIGINS?: string;
 }
@@ -43,22 +57,62 @@ const DEFAULT_ORIGINS = [
 ];
 
 function corsHeaders(request: Request, env: Env): Record<string, string> {
-  const allowed = env.ALLOWED_ORIGINS
-    ? env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
-    : DEFAULT_ORIGINS;
   const origin = request.headers.get('Origin') ?? '';
-  const permitted = allowed.includes(origin) ? origin : allowed[0];
+  const permitted = allowedOrigins(env).includes(origin) ? origin : allowedOrigins(env)[0];
   return {
     'Access-Control-Allow-Origin': permitted,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, X-Journal-Key',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Journal-Key, Authorization',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin',
   };
 }
 
-/** Resolves the journal named by the key, creating it on first contact. */
+/** The origins allowed to talk to this API — also the only sign-in redirect targets. */
+function allowedOrigins(env: Env): string[] {
+  return env.ALLOWED_ORIGINS
+    ? env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
+    : DEFAULT_ORIGINS;
+}
+
+/**
+ * The signed-in reader, or null.
+ *
+ * The bearer token is looked up by its hash; the row is only trusted while it
+ * has not expired. Sessions slide: a reader who keeps using the app is never
+ * asked to sign in again, and the extension happens on read rather than via a
+ * refresh-token dance, which a single-page app has no way to keep quiet about.
+ */
+async function resolveUser(request: Request, env: Env): Promise<{ id: string; email?: string; name?: string; picture?: string } | null> {
+  const token = bearerToken(request);
+  if (!token) return null;
+  const hash = await hashKey(token);
+  const now = Date.now();
+  const row = await env.DB.prepare(
+    `SELECT s.expires_at, u.id, u.email, u.name, u.picture
+       FROM sessions s JOIN users u ON u.id = s.user_id
+      WHERE s.token_hash = ?`,
+  )
+    .bind(hash)
+    .first<{ expires_at: number; id: string; email: string | null; name: string | null; picture: string | null }>();
+  if (!row || row.expires_at <= now) return null;
+
+  // Slide the expiry when more than half the session has passed.
+  if (row.expires_at - now < SESSION_TTL_MS / 2) {
+    await env.DB.prepare('UPDATE sessions SET expires_at = ? WHERE token_hash = ?')
+      .bind(now + SESSION_TTL_MS, hash)
+      .run();
+  }
+  return { id: row.id, email: row.email ?? undefined, name: row.name ?? undefined, picture: row.picture ?? undefined };
+}
+
+/** Resolves the journal named by the session token or the key, creating it on first contact. */
 async function resolveJournal(request: Request, env: Env, create: boolean): Promise<{ id: string; revision: number } | null> {
+  // A signed-in reader reaches the account's journal, even when a key is also
+  // present: the account is the identity, the key is the legacy path.
+  const user = await resolveUser(request, env);
+  if (user) return resolveJournalForUser(env, user, create);
+
   const key = request.headers.get('X-Journal-Key');
   if (!looksLikeKey(key)) return null;
   const hash = await hashKey(key, env.JOURNAL_PEPPER);
@@ -92,6 +146,56 @@ async function resolveJournal(request: Request, env: Env, create: boolean): Prom
     .bind(hash)
     .first<{ id: string; revision: number }>();
   return created ? { id: created.id, revision: created.revision } : null;
+}
+
+/**
+ * The journal a signed-in reader owns, creating it on first contact.
+ *
+ * `key_hash` is NOT NULL in the schema, so an account journal carries a random
+ * placeholder credential that is never given out: the account's session is the
+ * only way in. The insert races are benign — a concurrent first sign-in either
+ * conflicts on the unique owner index or lands after the read, and both end at
+ * the same journal.
+ */
+async function resolveJournalForUser(
+  env: Env,
+  user: { id: string; email?: string; name?: string; picture?: string },
+  create: boolean,
+): Promise<{ id: string; revision: number } | null> {
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT INTO users (id, email, name, picture, created_at, last_seen_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET email = excluded.email, name = excluded.name,
+       picture = excluded.picture, last_seen_at = excluded.last_seen_at`,
+  )
+    .bind(user.id, user.email ?? null, user.name ?? null, user.picture ?? null, now, now)
+    .run();
+
+  const existing = await env.DB.prepare('SELECT id, revision FROM journals WHERE user_id = ?')
+    .bind(user.id)
+    .first<{ id: string; revision: number }>();
+  if (existing) {
+    await env.DB.prepare('UPDATE journals SET last_seen_at = ? WHERE id = ?').bind(now, existing.id).run();
+    return existing;
+  }
+  if (!create) return null;
+
+  const credentialHash = await hashKey(randomToken());
+  const id = `j_u_${credentialHash.slice(0, 24)}`;
+  try {
+    await env.DB.prepare(
+      `INSERT INTO journals (id, key_hash, schema_version, revision, created_at, last_seen_at, user_id)
+       VALUES (?, ?, 3, 0, ?, ?, ?)`,
+    )
+      .bind(id, credentialHash, now, now, user.id)
+      .run();
+  } catch {
+    // Lost a create race against the unique owner index; the read decides.
+  }
+  return await env.DB.prepare('SELECT id, revision FROM journals WHERE user_id = ?')
+    .bind(user.id)
+    .first<{ id: string; revision: number }>();
 }
 
 /* ── validation helpers ── */
@@ -282,6 +386,10 @@ async function handleSync(request: Request, env: Env, cors: Record<string, strin
 
   return json(
     {
+      // Echoed so the client can notice the journal itself changed — a sign-in
+      // moving this device from its key journal to its account journal — and
+      // reset the counters it filters push and pull with.
+      journalId: journal.id,
       revision,
       changes: {
         books: (outBooks.results ?? []).map((r) => ({
@@ -491,6 +599,157 @@ async function handleReadUrl(request: Request, env: Env): Promise<Response> {
   return json({ url: signed.url, expiresIn: signed.expiresIn }, 200, corsHeaders(request, env));
 }
 
+/* ── Google sign-in ── */
+
+function authConfigured(env: Env): boolean {
+  return Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
+}
+
+function authNotConfigured(request: Request, env: Env): Response {
+  return json(
+    { error: 'Sign-in is not configured on this server yet. The journal key still works.' },
+    503,
+    corsHeaders(request, env),
+  );
+}
+
+async function handleAuthStart(request: Request, env: Env): Promise<Response> {
+  if (!authConfigured(env)) return authNotConfigured(request, env);
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return badRequest('Body is not valid JSON', request, env);
+  }
+  if (!isRecord(body)) return badRequest('Body must be an object', request, env);
+
+  const redirectUri = typeof body.redirectUri === 'string' ? body.redirectUri : '';
+  // The app's own origin, and nothing else: Google returns the code there, so
+  // an arbitrary redirect would hand an authorization code to a stranger.
+  if (!isAllowedRedirect(redirectUri, allowedOrigins(env))) {
+    return badRequest('This app may not complete sign-in from that address', request, env);
+  }
+
+  const state = randomToken(32);
+  const codeVerifier = randomToken(32);
+  const nonce = randomToken(16);
+  const now = Date.now();
+
+  // Stale attempts are dropped as a side effect rather than waiting for the
+  // cron: this endpoint is the only one a stuck sign-in ever touches again.
+  await env.DB.batch([
+    env.DB.prepare(
+      'INSERT INTO oauth_states (state, code_verifier, nonce, redirect_uri, created_at) VALUES (?, ?, ?, ?, ?)',
+    ).bind(state, codeVerifier, nonce, redirectUri, now),
+    env.DB.prepare('DELETE FROM oauth_states WHERE created_at < ?').bind(now - OAUTH_STATE_TTL_MS),
+  ]);
+
+  const authorizeUrl = buildAuthorizeUrl({
+    clientId: env.GOOGLE_CLIENT_ID!,
+    redirectUri,
+    state,
+    nonce,
+    codeChallenge: await pkceChallenge(codeVerifier),
+  });
+  return json({ authorizeUrl }, 200, corsHeaders(request, env));
+}
+
+async function handleAuthCallback(request: Request, env: Env): Promise<Response> {
+  if (!authConfigured(env)) return authNotConfigured(request, env);
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return badRequest('Body is not valid JSON', request, env);
+  }
+  if (!isRecord(body)) return badRequest('Body must be an object', request, env);
+
+  const code = typeof body.code === 'string' ? body.code : '';
+  const state = typeof body.state === 'string' ? body.state : '';
+  const redirectUri = typeof body.redirectUri === 'string' ? body.redirectUri : '';
+  if (!code || !state || !redirectUri) {
+    return badRequest('code, state and redirectUri are required', request, env);
+  }
+
+  const row = await env.DB.prepare(
+    'SELECT code_verifier, nonce, redirect_uri, created_at FROM oauth_states WHERE state = ?',
+  )
+    .bind(state)
+    .first<{ code_verifier: string; nonce: string; redirect_uri: string; created_at: number }>();
+  // Unknown, already used, or expired: all get the same answer, and none get
+  // a hint about which. A state is consumed exactly once.
+  if (!row || Date.now() - row.created_at > OAUTH_STATE_TTL_MS || row.redirect_uri !== redirectUri) {
+    return json({ error: 'This sign-in attempt is unknown or has expired. Start again.' }, 400, corsHeaders(request, env));
+  }
+  await env.DB.prepare('DELETE FROM oauth_states WHERE state = ?').bind(state).run();
+
+  let tokenResponse: Response;
+  try {
+    tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: env.GOOGLE_CLIENT_ID!,
+        client_secret: env.GOOGLE_CLIENT_SECRET!,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+        code_verifier: row.code_verifier,
+      }),
+    });
+  } catch {
+    return json({ error: 'Google did not answer. Try signing in again.' }, 504, corsHeaders(request, env));
+  }
+  if (!tokenResponse.ok) {
+    return json({ error: 'Google refused this sign-in. Start again.' }, 502, corsHeaders(request, env));
+  }
+
+  const tokens = (await tokenResponse.json().catch(() => null)) as { id_token?: string } | null;
+  if (!tokens || typeof tokens.id_token !== 'string') {
+    return json({ error: 'Google did not return an identity. Start again.' }, 502, corsHeaders(request, env));
+  }
+  const claims = decodeIdToken(tokens.id_token);
+  if (!claims || !validateClaims(claims, { clientId: env.GOOGLE_CLIENT_ID!, nonce: row.nonce, now: Date.now() })) {
+    return json({ error: 'The identity Google returned could not be trusted. Start again.' }, 401, corsHeaders(request, env));
+  }
+
+  const user = profileOf(claims);
+  const token = randomToken();
+  const tokenHash = await hashKey(token);
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO users (id, email, name, picture, created_at, last_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET email = excluded.email, name = excluded.name,
+         picture = excluded.picture, last_seen_at = excluded.last_seen_at`,
+    ).bind(user.id, user.email ?? null, user.name ?? null, user.picture ?? null, now, now),
+    env.DB.prepare(
+      'INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)',
+    ).bind(tokenHash, user.id, now, now + SESSION_TTL_MS),
+  ]);
+
+  return json({ token, expiresAt: now + SESSION_TTL_MS, user }, 200, corsHeaders(request, env));
+}
+
+async function handleAuthSession(request: Request, env: Env): Promise<Response> {
+  const user = await resolveUser(request, env);
+  if (!user) return unauthorised(corsHeaders(request, env), 'Not signed in');
+  return json({ user }, 200, corsHeaders(request, env));
+}
+
+async function handleAuthLogout(request: Request, env: Env): Promise<Response> {
+  const token = bearerToken(request);
+  if (token) {
+    await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(await hashKey(token)).run();
+  }
+  // Signing out is idempotent: an unknown or already-dead token still ends up
+  // in the same place, so the client can always clear its local copy after this.
+  return json({ ok: true }, 200, corsHeaders(request, env));
+}
+
 /* ── entry point ── */
 
 export default {
@@ -501,7 +760,7 @@ export default {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: cors });
     }
-    if (request.method !== 'POST') {
+    if (request.method !== 'POST' && !(request.method === 'GET' && url.pathname === '/api/auth/session')) {
       return json({ error: 'Method not allowed' }, 405, cors);
     }
 
@@ -509,6 +768,14 @@ export default {
       switch (url.pathname) {
         case '/api/hello':
           return await handleHello(request, env);
+        case '/api/auth/start':
+          return await handleAuthStart(request, env);
+        case '/api/auth/callback':
+          return await handleAuthCallback(request, env);
+        case '/api/auth/session':
+          return await handleAuthSession(request, env);
+        case '/api/auth/logout':
+          return await handleAuthLogout(request, env);
         case '/api/sync':
           await env.BOOKS.head('__warm__').catch(() => null); // touch the binding early
           return await handleSync(request, env, cors);
@@ -531,6 +798,7 @@ export default {
    * so the cron only earns its keep once file storage is configured.
    */
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(collectSessions(env.DB));
     const config = r2Config(env);
     if (!config) return;
     ctx.waitUntil(collectGarbage(env.DB, config));

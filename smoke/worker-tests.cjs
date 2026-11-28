@@ -54,6 +54,7 @@ fs.writeFileSync(
     },
     include: [
       path.join(WORKER, 'src', 'auth.ts'),
+      path.join(WORKER, 'src', 'oauth.ts'),
       path.join(WORKER, 'src', 'sync.ts'),
       path.join(WORKER, 'src', 'r2.ts'),
     ],
@@ -74,6 +75,7 @@ try {
 }
 
 const auth = require(path.join(OUT, 'auth.js'));
+const oauth = require(path.join(OUT, 'oauth.js'));
 const sync = require(path.join(OUT, 'sync.js'));
 
 /*
@@ -123,6 +125,108 @@ check('timingSafeEqual accepts equal strings and rejects everything else', () =>
   assert.strictEqual(auth.timingSafeEqual('abc123', 'abc12'), false, 'length mismatch');
   assert.strictEqual(auth.timingSafeEqual('', ''), true);
   assert.strictEqual(auth.timingSafeEqual('abc', ''), false);
+});
+
+/* ── sessions ── */
+
+check('bearerToken reads a well-formed Authorization header and nothing else', () => {
+  const token = 't'.repeat(43);
+  const withToken = new Request('https://api.example.test/api/sync', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.strictEqual(auth.bearerToken(withToken), token);
+  const bare = new Request('https://api.example.test/api/sync');
+  assert.strictEqual(auth.bearerToken(bare), null);
+  const short = new Request('https://api.example.test/api/sync', {
+    headers: { Authorization: `Bearer ${'t'.repeat(22)}` },
+  });
+  assert.strictEqual(auth.bearerToken(short), null, 'a key is not a session token');
+  const wrongScheme = new Request('https://api.example.test/api/sync', {
+    headers: { Authorization: `Basic ${token}` },
+  });
+  assert.strictEqual(auth.bearerToken(wrongScheme), null);
+});
+
+/* ── Google sign-in ── */
+
+check('randomToken produces base64url of the asked length', () => {
+  const token = oauth.randomToken();
+  assert.strictEqual(token.length, 43, '32 bytes → 43 characters');
+  assert.match(token, /^[A-Za-z0-9_-]+$/);
+  assert.notStrictEqual(oauth.randomToken(), token, 'two calls never collide');
+});
+
+checkAsync('the PKCE challenge is the S256 of the verifier (RFC 7636 appendix B)', async () => {
+  const verifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+  assert.strictEqual(await oauth.pkceChallenge(verifier), 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM');
+});
+
+check('buildAuthorizeUrl carries every parameter Google needs', () => {
+  const url = new URL(
+    oauth.buildAuthorizeUrl({
+      clientId: 'cid',
+      redirectUri: 'https://app.test/',
+      state: 's1',
+      nonce: 'n1',
+      codeChallenge: 'c1',
+    }),
+  );
+  assert.strictEqual(url.origin + url.pathname, 'https://accounts.google.com/o/oauth2/v2/auth');
+  assert.strictEqual(url.searchParams.get('response_type'), 'code');
+  assert.strictEqual(url.searchParams.get('code_challenge_method'), 'S256');
+  assert.strictEqual(url.searchParams.get('prompt'), 'select_account');
+  assert.strictEqual(url.searchParams.get('scope'), 'openid email profile');
+  assert.strictEqual(url.searchParams.get('state'), 's1');
+});
+
+check('only the app root on an allowed origin may complete sign-in', () => {
+  const allowed = ['https://app.test', 'http://localhost:5173'];
+  assert.strictEqual(oauth.isAllowedRedirect('https://app.test/', allowed), true);
+  assert.strictEqual(oauth.isAllowedRedirect('https://app.test', allowed), true, 'a bare origin is the same address');
+  assert.strictEqual(oauth.isAllowedRedirect('http://localhost:5173/', allowed), true);
+  assert.strictEqual(oauth.isAllowedRedirect('https://app.test/auth/callback', allowed), false, 'deep links are not registered');
+  assert.strictEqual(oauth.isAllowedRedirect('https://app.test/?code=stolen', allowed), false, 'a redirect carries nothing in');
+  assert.strictEqual(oauth.isAllowedRedirect('https://evil.test/', allowed), false);
+  assert.strictEqual(oauth.isAllowedRedirect('not a url', allowed), false);
+});
+
+function makeIdToken(claims) {
+  const part = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  return `${part({ alg: 'RS256', kid: 'k' })}.${part(claims)}.c2ln`;
+}
+
+check('decodeIdToken reads the payload and refuses everything else', () => {
+  const claims = { sub: 'user-1', iss: 'https://accounts.google.com', aud: 'cid', exp: 9999999999, nonce: 'n1' };
+  const decoded = oauth.decodeIdToken(makeIdToken(claims));
+  assert.strictEqual(decoded.sub, 'user-1');
+  assert.strictEqual(oauth.decodeIdToken('not-a-jwt'), null);
+  assert.strictEqual(oauth.decodeIdToken('a.b'), null);
+  assert.strictEqual(oauth.decodeIdToken(`${makeIdToken(claims)}.extra`), null, 'three parts, no more');
+});
+
+check('claims are believed only from Google, for this client, now, with this nonce', () => {
+  const expected = { clientId: 'cid', nonce: 'n1', now: 1_700_000_000_000 };
+  const good = { sub: 'u1', iss: 'https://accounts.google.com', aud: 'cid', exp: 1_700_000_500, nonce: 'n1' };
+  assert.strictEqual(oauth.validateClaims(good, expected), true);
+  assert.strictEqual(oauth.validateClaims({ ...good, aud: ['other', 'cid'] }, expected), true, 'Google sends one audience here, arrays stay legal');
+  assert.strictEqual(oauth.validateClaims({ ...good, iss: 'https://evil.test' }, expected), false, 'a foreign issuer');
+  assert.strictEqual(oauth.validateClaims({ ...good, aud: 'not-this-client' }, expected), false);
+  assert.strictEqual(oauth.validateClaims({ ...good, exp: 1_699_999_000 }, expected), false, 'expired');
+  assert.strictEqual(oauth.validateClaims({ ...good, nonce: 'n2' }, expected), false, 'the nonce binds token to sign-in');
+  assert.strictEqual(oauth.validateClaims({ ...good, exp: undefined }, expected), false);
+});
+
+check('profileOf keeps the subject and trims the display fields', () => {
+  const profile = oauth.profileOf({
+    sub: 'user-1',
+    email: 'reader@example.test',
+    name: 'x'.repeat(400),
+    picture: 'https://example.test/'.concat('y'.repeat(3000)),
+  });
+  assert.strictEqual(profile.id, 'user-1');
+  assert.strictEqual(profile.name.length, 200);
+  assert.strictEqual(profile.picture.length, 2048);
+  assert.strictEqual(oauth.profileOf({ sub: 'user-1', email: 42 }).email, undefined);
 });
 
 check('timingSafeEqual examines every character', () => {

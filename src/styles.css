@@ -1748,6 +1748,38 @@ mark.reader-highlight:hover {
   color: var(--danger);
 }
 
+/* The signed-in account: avatar beside name and email, quiet by design —
+   the account identifies the journal, it is not the point of the screen. */
+.settings-account {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin-bottom: var(--s-3);
+}
+
+.settings-account > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.settings-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.settings-avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-weight: 600;
+}
+
 /* The key is displayed in a running monospace, spaced in fours so it can be
    read aloud; the canonical value is one unbroken string. */
 .settings-key {
