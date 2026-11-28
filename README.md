@@ -23,7 +23,7 @@ A personal book journal and EPUB reader — your shelves, notes in the margins, 
 The journal syncs across devices through a Cloudflare Worker backed by D1, with EPUB bytes in R2 — no account, no login. Your browser holds a **capability key**: whoever holds the key has access, and it behaves like a bookmark URL, not a password. The server stores only `SHA-256(key)`.
 
 - **Metadata** — books, quotes, shelves and reading positions sync automatically when you are online; offline, changes queue and go out on the next sync. There is no server UI: the app is the only way in.
-- **Book files** — when you add an EPUB while online, a copy is uploaded to the private bucket in the background. Open the same book on another device and the reader fetches it once, then keeps it locally. If a book is not in this browser and cannot be fetched, the reader says so instead of pretending.
+- **Book files** — when you add an EPUB, a copy is uploaded to the private bucket in the background; if the upload fails or the tab closes first, it is queued and retried until it lands, exactly like the journal's own changes. Open the same book on another device and the reader fetches it once, then keeps it locally. If a book is not in this browser and cannot be fetched, the reader says so instead of pretending.
 - **Your data, exported** still applies — exports never depend on the server.
 
 ## What it does not do yet
@@ -78,6 +78,7 @@ npx tsc -p tsconfig.smoke.json
 node smoke/smoke.cjs                  # render, parser, storage, exporters
 node smoke/epub-tests.cjs             # ZIP reader, EPUB metadata, shelves
 node smoke/plan-tests.cjs             # reading plan queue, pace, forecast
+node smoke/book-upload-queue-tests.cjs # book upload queue: enqueue, retry, drop
 node smoke/reader-tests.cjs           # EPUB opening, TOC, chapters, sanitising
 node smoke/reader-typography-tests.cjs # pagination maths, typography, AA spacing
 ```

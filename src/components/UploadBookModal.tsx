@@ -10,6 +10,7 @@ import type { EpubMetadata } from '../lib/epub';
 import { extractEpubMetadata } from '../lib/epub';
 import { readEpubFile, saveBookBytes } from '../lib/bookFiles';
 import { uploadBookBytes } from '../lib/api';
+import { enqueueUpload } from '../lib/bookUploadQueue';
 import { MetadataLookup } from './MetadataLookup';
 import type { BookMetadata } from '../lib/bookLookup';
 import { DEFAULT_BOOK_COLOR } from '../lib/colors';
@@ -155,9 +156,12 @@ export function UploadBookModal({
       // offline it simply does not happen yet, and the book stays fully readable.
       // But a failed copy must not be silent — the reader would believe the book
       // is backed up when it is not — so the failure is announced.
+      // Queued before the first attempt: if this upload fails, or the tab
+      // closes before it finishes, the retry engine still owes the cloud copy.
+      enqueueUpload(book.id);
       void uploadBookBytes(book.id, bytes).then((result) => {
         if (!result.ok) {
-          notify('The book was added, but its cloud copy failed. It stays readable on this device.', {
+          notify('The book was added, but its cloud copy failed. It stays readable on this device and will retry when you are online.', {
             tone: 'danger',
             duration: 8000,
           });
@@ -179,7 +183,7 @@ export function UploadBookModal({
           },
         });
       }).catch(() => {
-        notify('The book was added, but its cloud copy failed. It stays readable on this device.', {
+        notify('The book was added, but its cloud copy failed. It stays readable on this device and will retry when you are online.', {
           tone: 'danger',
           duration: 8000,
         });
