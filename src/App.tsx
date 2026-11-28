@@ -14,6 +14,7 @@ import { BrandMark, Icon } from './components/icons';
 import { ToastRegion, useToasts } from './lib/toasts';
 import { listPendingDeletes, removePendingDelete } from './lib/pendingDeletes';
 import { useAutoSync } from './lib/useAutoSync';
+import { useBookUploads } from './lib/useBookUploads';
 import { cx } from './lib/utils';
 
 type View = 'library' | 'plan' | 'quotes' | 'stats';
@@ -40,6 +41,9 @@ export default function App() {
   // change pushes after a short debounce, and anything another device wrote
   // arrives on the next catch-up. Sync state still surfaces in Settings.
   useAutoSync(store.rawData, store.replaceAll);
+  // Book bytes queue and retry like the journal does: a failed or interrupted
+  // cloud copy is re-attempted, so the book can still reach other devices.
+  useBookUploads(store.data, store.updateBook);
   const [view, setView] = useState<View>('library');
   const [openBookId, setOpenBookId] = useState<string | null>(null);
   const [readingBookId, setReadingBookId] = useState<string | null>(null);
